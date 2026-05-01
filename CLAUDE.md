@@ -129,7 +129,7 @@ Append new recommendations to `recommendations.csv` with `status=pending`. Use t
 
 ### Step 7 — Push & Archive
 
-Push the report summary to Feishu via `lark-cli im send`. Full report stays in `reports/`. Log end-of-run to `agent.log`. Release lock.
+Push the report summary to Feishu via `lark-cli --profile finance-agent im send`. Full report stays in `reports/`. Log end-of-run to `agent.log`. Release lock.
 
 ## Path B: Feishu On-Demand Interaction
 
@@ -151,12 +151,12 @@ When `feishu-listener.sh` receives a message from the whitelisted `ALLOWED_OPEN_
 ### How to Send Feishu Messages
 
 ```bash
-# Send to the whitelisted user
-lark-cli im send --user "$SENDER_ID" --msg "message text"
+# Send to the whitelisted user (always use project profile)
+lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "message text"
 
 # For long messages, write to temp file then send
 echo "$LONG_MSG" > /tmp/feishu_response.txt
-lark-cli im send --user "$SENDER_ID" --msg "$(cat /tmp/feishu_response.txt)"
+lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "$(cat /tmp/feishu_response.txt)"
 ```
 
 ## OpenBB Usage Pattern
