@@ -29,6 +29,13 @@ set -a
 source .env 2>/dev/null || true
 set +a
 
+# 检查必需的环境变量
+if [[ -z "${ALLOWED_OPEN_ID:-}" ]]; then
+  echo "[FATAL] ALLOWED_OPEN_ID 环境变量未设置，请在 .env 中配置。" >&2
+  flock -u 200
+  exit 1
+fi
+
 # shellcheck disable=SC1091
 source venv/bin/activate
 

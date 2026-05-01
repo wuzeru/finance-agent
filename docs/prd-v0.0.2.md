@@ -315,7 +315,8 @@ flock -n 200 || {
 }
 
 log_event() {
-  echo "{\"ts\":\"$(date -Iseconds)\",\"event\":\"feishu_query\",\"sender\":\"$SENDER_ID\",\"msg\":\"$(echo "$1" | jq -Rs .)\"}" >> agent.log
+  jq -n --arg ts "$(date -Iseconds)" --arg event "feishu_query" --arg sender "$SENDER_ID" --arg mid "$MSG_ID" --arg msg "$1" \
+    '{ts: $ts, event: $event, sender: $sender, message_id: $mid, msg: $msg}' >> agent.log
 }
 
 log_event "$MSG_TEXT"
@@ -331,7 +332,8 @@ if echo "$INTENT" | grep -qE "^报告$|最新报告"; then
   # 报告查询：读取最新报告直接推送，不经过 Claude Code
   LATEST=$(find reports/ -maxdepth 1 -name 'analysis-*.md' 2>/dev/null | sort -r | head -1)
   if [[ -n "$LATEST" ]]; then
-    SUMMARY=$(head -80 "$LATEST")
+    # 飞书单条消息约 3000 字符限制，预留 200 字符给前后缀，取报告前 2800 字符作为摘要
+    SUMMARY=$(head -c 2800 "$LATEST")
     lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "$(printf '📊 最新分析报告\n\n%s\n\n──\n完整报告: %s' "$SUMMARY" "$LATEST")"
   else
     lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "暂无分析报告，请先触发一次定时分析或使用「分析」指令。"
@@ -350,6 +352,11 @@ elif echo "$INTENT" | grep -qE "分析|持仓|诊断|portfolio"; then
 elif echo "$INTENT" | grep -qE "^[a-z]{1,5}$|查.*价格|看.*[a-z]{1,5}|快查"; then
   # 个股快查：从消息中提取 ticker
   TICKER=$(echo "$MSG_TEXT" | grep -oE '[A-Za-z]{1,5}' | head -1)
+  if [[ -z "$TICKER" ]]; then
+    lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "未识别到股票代码，请使用如「查 AAPL」或「TSLA」的格式。"
+    flock -u 200
+    exit 0
+  fi
   claude "用户通过飞书查询 $TICKER 的当前状态。请执行快速诊断（仅该标的）：
   1. 拉取价格、技术指标（RSI/MACD/MA）、基本面
   2. 输出：当前价、涨跌幅、技术面判断、是否处于目标区间、一句话操作建议
