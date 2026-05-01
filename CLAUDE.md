@@ -38,6 +38,8 @@ source venv/bin/activate
 ```
 
 API keys in `.env` (gitignored):
+- `FEISHU_APP_ID` — Feishu open platform app ID (for `lark-cli config init`)
+- `FEISHU_APP_SECRET` — Feishu open platform app secret
 - `OPENBB_FMP_API_KEY` — Financial Modeling Prep free tier (~250 req/day)
 - `OPENBB_FRED_API_KEY` — FRED macroeconomic data
 - `ALLOWED_OPEN_ID` — whitelisted Feishu open_id
