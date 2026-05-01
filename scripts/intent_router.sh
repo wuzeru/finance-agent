@@ -27,7 +27,7 @@ log_event() {
 
 reply() {
     local msg="$1"
-    lark-cli im send --user "$SENDER_ID" --msg "$msg"
+    lark-cli --profile finance-agent im +messages-send --user "$SENDER_ID" --msg "$msg"
 }
 
 # Acquire mkdir-based lock (non-blocking) to prevent concurrent Claude Code sessions.
@@ -153,7 +153,7 @@ if echo "$MSG_TEXT" | grep -qE '分析|持仓|诊断|portfolio'; then
 2. 通过 OpenBB 获取所有持仓的市场数据（优先 FMP，备选 yfinance）
 3. 验证 pending 建议 + 分析持仓
 4. 生成分析报告（含市场概况、历史回顾、持仓诊断、建议表、风险提示）
-注意：这是按需查询，不写 recommendations.csv，不归档到 reports/。用中文回复，不超过 3000 字。" < /dev/null 2>/dev/null)
+注意：这是按需查询，不写 recommendations.csv，不归档到 reports/。分析结束后通过飞书发送给用户。用中文回复，不超过 3000 字。" < /dev/null 2>/dev/null)
     if [[ -n "$reply" ]]; then
         reply "$reply"
     else
