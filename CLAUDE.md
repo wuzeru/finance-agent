@@ -82,7 +82,7 @@ Read `portfolio.csv` and `recommendations.csv` into context.
 
 ### Step 3 — Collect Data
 
-For each holding in `portfolio.csv`, execute Python snippets via terminal (inside venv) using OpenBB Platform v4. Data priority chain: **FMP → yfinance (fallback) → mark "unavailable"**.
+For each holding in `portfolio.csv`, execute Python snippets via terminal (inside venv) using OpenBB Platform v4. Data priority chain (US/global symbols): **FMP → yfinance → mark "unavailable"**. For Chinese-market symbols (A-shares/HK), see [A-Share / HK Stock Data Sources](#a-share--hk-stock-data-sources) below.
 
 Fetch per symbol: current price, daily change, 20/50/200 MA, RSI(14), MACD, Bollinger Bands, PE/PB/market cap, last 5 news headlines.
 
@@ -185,10 +185,10 @@ For Chinese market data (A-shares and Hong Kong stocks), use **akshare** — the
 
 ### Installation
 
-Already included in `requirements.txt`. Installed alongside OpenBB:
+Already included in `requirements.txt`. Install with:
 
 ```bash
-pip install akshare
+pip install -r requirements.txt
 ```
 
 ### Data Priority Chain (updated for Chinese markets)

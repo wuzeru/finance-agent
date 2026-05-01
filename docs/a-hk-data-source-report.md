@@ -71,7 +71,7 @@ The finance-agent currently relies on OpenBB (FMP/yfinance), which primarily ser
 ```python
 import akshare as ak
 
-# A-share daily data (symbol format: sh600519, sz000001)
+# A-share daily data (symbol format: 6-digit code, no prefix)
 df = ak.stock_zh_a_hist(symbol="600519", period="daily", start_date="20250101", end_date="20260501", adjust="qfq")
 
 # A-share real-time snapshot
@@ -91,9 +91,11 @@ df = ak.stock_hk_spot_em()
 
 | Market | Format | Example |
 |--------|--------|---------|
-| Shanghai A-share | `sh` + 6-digit code | `sh600519` (贵州茅台) |
-| Shenzhen A-share | `sz` + 6-digit code | `sz000001` (平安银行) |
-| HK Stock | 5-digit code, left-padded | `00700` (腾讯), `09988` (阿里) |
+| Shanghai A-share (`stock_zh_a_hist`) | 6-digit numeric string | `"600519"` (贵州茅台) |
+| Shenzhen A-share (`stock_zh_a_hist`) | 6-digit numeric string | `"000001"` (平安银行) |
+| Shanghai A-share (`stock_zh_a_spot_em`) | `sh` + 6-digit code | `"sh600519"` |
+| Shenzhen A-share (`stock_zh_a_spot_em`) | `sz` + 6-digit code | `"sz000001"` |
+| HK Stock | 5-digit code, zero-left-padded | `"00700"` (腾讯), `"09988"` (阿里) |
 
 ## Technical Notes
 
