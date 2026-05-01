@@ -86,7 +86,7 @@ Read `portfolio.csv` and `recommendations.csv` into context.
 
 ### Step 3 — Collect Data
 
-For each holding in `portfolio.csv`, execute Python snippets via terminal (inside venv) using OpenBB Platform v4. Data priority chain: **FMP → yfinance (fallback) → mark "unavailable"**.
+For each holding in `portfolio.csv`, execute Python snippets via terminal (inside venv) using OpenBB Platform v4. Data priority chain (US/global symbols): **FMP → yfinance → mark "unavailable"**. For Chinese-market symbols (A-shares/HK), see [A-Share / HK Stock Data Sources](#a-share--hk-stock-data-sources) below.
 
 Fetch per symbol: current price, daily change, 20/50/200 MA, RSI(14), MACD, Bollinger Bands, PE/PB/market cap, last 5 news headlines.
 
@@ -182,6 +182,114 @@ profile = obb.equity.fundamental.profile("AAPL", provider="fmp")
 ```
 
 Always prefer FMP provider first, fallback to yfinance. Log each fetch attempt in `agent.log`.
+
+## A-Share / HK Stock Data Sources
+
+For Chinese market data (A-shares and Hong Kong stocks), use **akshare** — the only free Python library covering both markets with no registration required. akshare coexists with OpenBB in the same `venv/` without conflicts.
+
+### Installation
+
+Already included in `requirements.txt`. Install with:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Data Priority Chain (updated for Chinese markets)
+
+```
+FMP → yfinance → akshare → mark "unavailable"
+```
+
+akshare serves as the data source for Chinese-market symbols where FMP/yfinance have no coverage.
+
+### Key Functions
+
+```python
+import akshare as ak
+
+# A-share historical daily (symbol: 6-digit code, no prefix for stock_zh_a_hist)
+# adjust: "qfq" (forward-adjusted, recommended) | "hfq" | "" (nominal)
+df = ak.stock_zh_a_hist(symbol="600519", period="daily",
+                        start_date="20250101", end_date="20260501",
+                        adjust="qfq")
+
+# A-share real-time snapshot (single request, all stocks)
+df = ak.stock_zh_a_spot_em()
+
+# HK stock historical daily (symbol: 5-digit code, left-padded with zeros)
+df = ak.stock_hk_hist(symbol="00700", period="daily",
+                      start_date="20250101", end_date="20260501",
+                      adjust="qfq")
+
+# HK stock real-time snapshot
+df = ak.stock_hk_spot_em()
+
+# A-share individual stock fundamentals (PE/PB/market cap etc.)
+df = ak.stock_individual_info_em(symbol="600519")
+```
+
+### Dual-Source Fallback (East Money → Sina)
+
+East Money (`em` suffix functions) is the primary data source, but its API servers may reject connections from non-mainland-China IPs. Always use a fallback pattern:
+
+```python
+# A-share: try East Money first, fall back to Sina
+try:
+    df = ak.stock_zh_a_hist(symbol="600519", period="daily",
+                            start_date=start, end_date=end, adjust="qfq")
+except Exception as e:
+    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+        df = ak.stock_zh_a_daily(symbol="sh600519",
+                                 start_date=start, end_date=end, adjust="qfq")
+        # Sina uses English column names; rename for consistency
+        df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
+                                "low": "最低", "close": "收盘", "volume": "成交量"})
+
+# HK: same pattern
+try:
+    df = ak.stock_hk_hist(symbol="00700", period="daily",
+                          start_date=start, end_date=end, adjust="qfq")
+except Exception as e:
+    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+        df = ak.stock_hk_daily(symbol="00700", adjust="qfq")
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+        df = df[(df["date"] >= start) & (df["date"] <= end)]
+        df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
+                                "low": "最低", "close": "收盘", "volume": "成交量"})
+```
+
+### Symbol Format Rules
+
+| Market | Format | Example |
+|--------|--------|---------|
+| Shanghai A-share (`stock_zh_a_hist`) | 6-digit numeric string | `"600519"` (贵州茅台) |
+| Shenzhen A-share (`stock_zh_a_hist`) | 6-digit numeric string | `"000001"` (平安银行) |
+| HK Stock (`stock_hk_hist`) | 5-digit string, zero-left-padded | `"00700"` (腾讯), `"09988"` (阿里) |
+
+Note: `stock_zh_a_spot_em()` uses a different format: `"sh600519"`, `"sz000001"`.
+
+### Rate Limiting Recommendations
+
+- No official rate limit, but scrape-based. Rapid-fire requests can trigger temporary IP blocks from upstream sources (Sina/East Money/Tencent).
+- Add `time.sleep(1)` between individual symbol requests.
+- Batch snapshots (`stock_zh_a_spot_em()`, `stock_hk_spot_em()`) are single requests — no throttling needed.
+
+### Known Limitations
+
+- **End-of-day only**: No reliable real-time/intraday data for trading decisions
+- **Scrape-based**: No API SLA. Upstream website changes (Sina, East Money, Tencent) may cause transient 1-2 week breakages
+- **No Level 2 data**: Only Level 1 (OHLCV + basic fundamentals)
+- **HK GEM limited**: Price/volume available, but fundamentals coverage is thin for GEM stocks
+
+### Integration Verification
+
+Run the integration test to confirm akshare is functional:
+
+```bash
+source venv/bin/activate
+python scripts/test_akshare.py
+```
 
 ## Model Selection
 

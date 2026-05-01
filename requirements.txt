@@ -3,6 +3,7 @@ aiohttp==3.13.5
 aiohttp-client-cache==0.11.1
 aiosignal==1.4.0
 aiosqlite==0.20.0
+akshare==1.18.59
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
@@ -15,6 +16,7 @@ cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.3
 curl_cffi==0.15.0
+decorator==5.2.1
 deepdiff==9.0.0
 defusedxml==0.7.1
 et_xmlfile==2.0.0
@@ -26,9 +28,11 @@ html5lib==1.1
 idna==3.13
 importlib_metadata==9.0.0
 itsdangerous==2.2.0
+jsonpath==0.82.2
 lxml==6.1.0
 markdown-it-py==4.0.0
 mdurl==0.1.2
+mini-racer==0.14.1
 multidict==6.7.1
 multitasking==0.0.13
 numpy==2.4.4
@@ -87,6 +91,8 @@ ruff==0.15.12
 six==1.17.0
 soupsieve==2.8.3
 starlette==0.52.1
+tabulate==0.10.0
+tqdm==4.67.3
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 url-normalize==1.4.3

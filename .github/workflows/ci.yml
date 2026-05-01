@@ -30,6 +30,6 @@ jobs:
 
       - name: Check YAML syntax
         run: |
-          pip install pyyaml
+          python -m pip install pyyaml
           python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
           echo "YAML OK"
