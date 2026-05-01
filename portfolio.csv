@@ -1,0 +1,5 @@
+symbol,name,type,quantity,avg_cost,currency,exchange,notes
+AAPL,Apple Inc.,stock,100,175.50,USD,NASDAQ,长期持有
+VOO,Vanguard S&P 500 ETF,etf,50,520.00,USD,NYSE,核心指数配置
+TSLA,Tesla Inc.,stock,30,210.80,USD,NASDAQ,成长型配置
+HKG:0700,Tencent Holdings Ltd.,stock,200,350.00,HKD,SEHK,港股核心持仓
