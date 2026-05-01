@@ -231,12 +231,12 @@ Trigger → Load → Collect → Think & Verify → Generate → Write Recs → 
 | 订阅方式 | WebSocket 长连接 | 无需公网 URL，本地 Mac mini 直连 |
 
 ```bash
-# 使用 lark-cli 初始化配置（在 Mac mini 上执行一次）
-lark-cli config init
-lark-cli auth login        # 按提示完成 OAuth 登录
+# 使用 lark-cli 以独立 profile 初始化配置（在 Mac mini 上执行一次）
+# --profile finance-agent 确保与用户本机其他 lark-cli 配置隔离
+lark-cli --profile finance-agent auth login
 
 # 配置完成后验证
-lark-cli im send --user <your_open_id> --msg "Agent 上线"
+lark-cli --profile finance-agent im send --user <your_open_id> --msg "Agent 上线"
 ```
 
 ### 6.4 消息监听：`scripts/feishu-listener.sh`
@@ -251,6 +251,19 @@ set -euo pipefail
 PROJECT_DIR="/Users/yourname/finance-agent"
 cd "$PROJECT_DIR"
 
+# ── 前置检查 ──
+# 1. 检查 lark-cli 是否安装
+if ! command -v lark-cli &> /dev/null; then
+  echo "[FATAL] lark-cli 未安装，请先安装 lark-cli 后重新运行。" >&2
+  exit 1
+fi
+
+# 2. 检查 finance-agent profile 是否已登录
+if ! lark-cli --profile finance-agent contact +get-user &> /dev/null; then
+  echo "[FATAL] finance-agent profile 未登录，请先执行: lark-cli --profile finance-agent auth login" >&2
+  exit 1
+fi
+
 # 载入环境变量
 set -a
 source .env 2>/dev/null || true
@@ -260,7 +273,7 @@ source venv/bin/activate
 
 # lark-event 通过 WebSocket 长连接监听消息事件
 # 输出为 NDJSON，每行一条事件，通过管道交给 intent_router 处理
-lark-event \
+lark-event --profile finance-agent \
   --event-type im.message.receive_v1 \
   --compact \
   --output-ndjson \
@@ -297,7 +310,7 @@ cd "$PROJECT_DIR"
 # 互斥锁：避免与定时分析同时运行
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
-  lark-cli im send --user "$SENDER_ID" --msg "Agent 正在执行分析任务，请稍后再试。"
+  lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "Agent 正在执行分析任务，请稍后再试。"
   exit 0
 }
 
@@ -309,15 +322,29 @@ log_event "$MSG_TEXT"
 
 INTENT=$(echo "$MSG_TEXT" | tr '[:upper:]' '[:lower:]')
 
+# 对消息文本做 shell 转义，防止 $MSG_TEXT 包含的特殊字符被 bash 解释
+MSG_TEXT_SAFE=$(printf '%s' "$MSG_TEXT" | sed 's/[\\"$`]/\\&/g')
+
 # ── 意图识别与路由 ──
 
-if echo "$INTENT" | grep -qE "分析|持仓|诊断|报告|portfolio"; then
+if echo "$INTENT" | grep -qE "^报告$|最新报告"; then
+  # 报告查询：读取最新报告直接推送，不经过 Claude Code
+  LATEST=$(find reports/ -maxdepth 1 -name 'analysis-*.md' 2>/dev/null | sort -r | head -1)
+  if [[ -n "$LATEST" ]]; then
+    SUMMARY=$(head -80 "$LATEST")
+    lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "$(printf '📊 最新分析报告\n\n%s\n\n──\n完整报告: %s' "$SUMMARY" "$LATEST")"
+  else
+    lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "暂无分析报告，请先触发一次定时分析或使用「分析」指令。"
+  fi
+
+elif echo "$INTENT" | grep -qE "分析|持仓|诊断|portfolio"; then
   # 完整持仓分析
   claude "用户通过飞书发起了一次持仓分析请求。请按照 CLAUDE.md 中的完整工作流执行分析，但注意：
   1. 报告需要精简（控制在飞书单条消息长度内，约 3000 字符），核心输出「操作建议表」+「历史准确率」
   2. 不要归档到 reports/（这是按需查询，非定时分析）
   3. 不要写入 recommendations.csv（非正式建议）
   4. 分析结束后，将结果通过飞书发送给用户 open_id=$SENDER_ID
+  4.1 飞书发送消息请使用: lark-cli --profile finance-agent im send --user \"$SENDER_ID\" --msg \"...\"
   触发时间: $(date '+%Y-%m-%d %H:%M') | 触发方式: 飞书按需"
 
 elif echo "$INTENT" | grep -qE "^[a-z]{1,5}$|查.*价格|看.*[a-z]{1,5}|快查"; then
@@ -327,7 +354,8 @@ elif echo "$INTENT" | grep -qE "^[a-z]{1,5}$|查.*价格|看.*[a-z]{1,5}|快查"
   1. 拉取价格、技术指标（RSI/MACD/MA）、基本面
   2. 输出：当前价、涨跌幅、技术面判断、是否处于目标区间、一句话操作建议
   3. 结果控制在 1500 字符内
-  4. 通过飞书发送给用户 open_id=$SENDER_ID"
+  4. 通过飞书发送给用户 open_id=$SENDER_ID
+  4.1 飞书发送消息请使用: lark-cli --profile finance-agent im send --user \"$SENDER_ID\" --msg \"...\""
 
 elif echo "$INTENT" | grep -qE "准确率|回溯|建议.*记录|历史|verify"; then
   # 建议回溯查询
@@ -335,10 +363,11 @@ elif echo "$INTENT" | grep -qE "准确率|回溯|建议.*记录|历史|verify"; 
   1. 最近 30 天准确率统计（按 action 类型 + 按标的分）
   2. 连续失误标记
   3. 结果控制在 2000 字符内
-  4. 通过飞书发送给用户 open_id=$SENDER_ID"
+  4. 通过飞书发送给用户 open_id=$SENDER_ID
+  4.1 飞书发送消息请使用: lark-cli --profile finance-agent im send --user \"$SENDER_ID\" --msg \"...\""
 
 elif echo "$INTENT" | grep -qE "help|帮助|命令|怎么用"; then
-  lark-cli im send --user "$SENDER_ID" --msg "$(cat <<'HELP'
+  lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "$(cat <<'HELP'
 📋 Finance Agent 可用指令：
 
 • 「分析」/「持仓诊断」 — 完整持仓分析与操作建议
@@ -351,8 +380,8 @@ HELP
 
 else
   # 通用问答：交由 Claude Code 自由理解
-  claude "用户通过飞书发送了以下消息: \"$MSG_TEXT\"
-这是来自投资分析 agent 用户的按需查询。请根据 CLAUDE.md 上下文和当前数据文件（portfolio.csv, recommendations.csv），用投资分析的视角回答用户的问题。回答控制在 2000 字符内。通过飞书发送给用户 open_id=$SENDER_ID。"
+  claude "用户通过飞书发送了以下消息: ${MSG_TEXT_SAFE}
+这是来自投资分析 agent 用户的按需查询。请根据 CLAUDE.md 上下文和当前数据文件（portfolio.csv, recommendations.csv），用投资分析的视角回答用户的问题。回答控制在 2000 字符内。通过飞书发送给用户 open_id=$SENDER_ID。飞书发送消息请使用: lark-cli --profile finance-agent im send --user \"$SENDER_ID\" --msg \"...\""
 fi
 
 flock -u 200
@@ -590,8 +619,8 @@ finance-agent/
 - [ ] 在飞书开放平台创建企业自建应用
 - [ ] 配置 `im:message:send_as_bot` / `im:message:read` / `im:message:event` 权限
 - [ ] 订阅 `im.message.receive_v1` 事件（WebSocket 方式）
-- [ ] 获取并记录自己的 `open_id`（通过 `lark-cli auth login`）
-- [ ] 验证：`lark-cli im send --user <open_id> --msg "hello"` 确认通路
+- [ ] 获取并记录自己的 `open_id`（通过 `lark-cli --profile finance-agent auth login`）
+- [ ] 验证：`lark-cli --profile finance-agent im send --user <open_id> --msg "hello"` 确认通路
 
 ### Phase 3: 数据文件
 - [ ] 创建 `portfolio.csv`（按 Schema，填入你的实际持仓）
