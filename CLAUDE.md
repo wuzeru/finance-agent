@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**语言要求：所有输出、报告和交互均使用中文。**
+
 ## Project Identity
 
 This is **not** a traditional software project — there is no `main.py`, no application server, no deployable binary. Claude Code **is the runtime**. The repo is a set of data files, shell scripts, and configuration that Claude Code reads and executes to function as an automated personal investment analysis agent.
@@ -36,6 +38,8 @@ source venv/bin/activate
 ```
 
 API keys in `.env` (gitignored):
+- `FEISHU_APP_ID` — Feishu open platform app ID (for `lark-cli config init`)
+- `FEISHU_APP_SECRET` — Feishu open platform app secret
 - `OPENBB_FMP_API_KEY` — Financial Modeling Prep free tier (~250 req/day)
 - `OPENBB_FRED_API_KEY` — FRED macroeconomic data
 - `ALLOWED_OPEN_ID` — whitelisted Feishu open_id
