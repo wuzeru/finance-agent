@@ -225,6 +225,36 @@ df = ak.stock_hk_spot_em()
 df = ak.stock_individual_info_em(symbol="600519")
 ```
 
+### Dual-Source Fallback (East Money → Sina)
+
+East Money (`em` suffix functions) is the primary data source, but its API servers may reject connections from non-mainland-China IPs. Always use a fallback pattern:
+
+```python
+# A-share: try East Money first, fall back to Sina
+try:
+    df = ak.stock_zh_a_hist(symbol="600519", period="daily",
+                            start_date=start, end_date=end, adjust="qfq")
+except Exception as e:
+    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+        df = ak.stock_zh_a_daily(symbol="sh600519",
+                                 start_date=start, end_date=end, adjust="qfq")
+        # Sina uses English column names; rename for consistency
+        df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
+                                "low": "最低", "close": "收盘", "volume": "成交量"})
+
+# HK: same pattern
+try:
+    df = ak.stock_hk_hist(symbol="00700", period="daily",
+                          start_date=start, end_date=end, adjust="qfq")
+except Exception as e:
+    if "connection" in str(e).lower() or "timeout" in str(e).lower():
+        df = ak.stock_hk_daily(symbol="00700", adjust="qfq")
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+        df = df[(df["date"] >= start) & (df["date"] <= end)]
+        df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
+                                "low": "最低", "close": "收盘", "volume": "成交量"})
+```
+
 ### Symbol Format Rules
 
 | Market | Format | Example |
