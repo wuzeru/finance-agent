@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**语言要求：所有输出、报告和交互均使用中文。**
+
 ## Project Identity
 
 This is **not** a traditional software project — there is no `main.py`, no application server, no deployable binary. Claude Code **is the runtime**. The repo is a set of data files, shell scripts, and configuration that Claude Code reads and executes to function as an automated personal investment analysis agent.
