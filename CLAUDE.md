@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Identity
 
-This is **not** a traditional software project — there is no `main.py`, no application server, no deployable binary. Claude Code **is the runtime**. The repo is a set of data files, shell scripts, and configuration that Claude Code reads and executes to function as an automated personal investment analysis agent.
+This is **not** a traditional software project — there is no `main.py`, no application server, no deployable binary. Claude Code **is the runtime**. The repo is a set of data files, Python scripts, and configuration that Claude Code reads and executes to function as an automated personal investment analysis agent.
 
 When you (Claude Code) are invoked in this directory, you are expected to drive the full analysis lifecycle: read portfolio data, fetch market data via OpenBB, reason about holdings, generate a structured report, and optionally push results to Feishu.
 
@@ -15,12 +15,14 @@ When you (Claude Code) are invoked in this directory, you are expected to drive 
 ```
 Path A (Scheduled Push)              Path B (On-demand Pull)
 
-launchd → run-analysis.sh            launchd → feishu-listener.sh → lark-event WebSocket
+launchd → run-analysis.py            launchd → feishu-listener.py → lark-event WebSocket
     ↓                                      ↓ (always-on)
-Claude Code full 7-step workflow     intent_router.sh → Claude Code targeted session
+Claude Code full 7-step workflow     Claude Code 自然语言理解 + 回复
     ↓                                      ↓
-report → Feishu push → archive       Feishu reply
+report → Feishu push → archive       listener 捕获 stdout → 飞书回复
 ```
+
+feishu-listener.py is a **pure bridge**: receives Feishu messages → strips @ mention → sends OK reaction → passes to Claude with `--session-id` → captures Claude's stdout → pushes reply to Feishu via `lark-cli +messages-send`. Claude outputs markdown content; the listener handles all Feishu I/O. No regex routing, no `intent_router.sh`.
 
 Both paths share `portfolio.csv`, `recommendations.csv`, `.env` credentials, and `venv/`. Never run both simultaneously — `.analysis.lock` file lock prevents this.
 
@@ -73,13 +75,11 @@ Every significant event gets a JSON line with `ts` and `event` fields. Track: se
 
 ## Path A: Scheduled Analysis Workflow (7 Steps)
 
-When invoked via `run-analysis.sh` (launchd trigger, weekdays 9:00 / 13:00):
+When invoked via `scripts/run-analysis.py` (launchd trigger, weekdays 9:00 / 13:00):
 
 ### Step 1 — Acquire Lock
 
-```bash
-exec 200>".analysis.lock" && flock 200
-```
+通过 `LOCK_FILE.touch(exist_ok=False)` 获取文件锁（touch 排他锁），与 feishu-listener.py 共享同一锁机制。锁超时 30 分钟后自动清理。
 
 ### Step 2 — Load State
 Read `portfolio.csv` and `recommendations.csv` into context.
@@ -133,53 +133,61 @@ Push the report summary to Feishu via `lark-cli --profile finance-agent im send`
 
 ## Path B: Feishu On-Demand Interaction
 
-When `feishu-listener.sh` receives a message from the whitelisted `ALLOWED_OPEN_ID`, it routes to `intent_router.sh` which spawns a Claude Code session.
+When `scripts/feishu-listener.py` receives a message from the whitelisted `ALLOWED_OPEN_ID`, it: strips @ mention → sends OK reaction → acquires lock → calls `claude -p` with `--session-id`/`--resume` → captures stdout → pushes reply to Feishu via `lark-cli +messages-send`.
 
-### Intent Routing Rules
+### How Claude Outputs Replies
 
-| User Input Pattern | Action | Scope |
-|---|---|---|
-| Contains "分析" / "持仓" / "诊断" / "portfolio" | Full analysis (Steps 2–5), condensed output ≤3000 chars | Do NOT write `recommendations.csv`, do NOT archive to `reports/` |
-| Single ticker (1-5 uppercase letters) or "查 XXXX" | Quick single-stock diagnosis: price + RSI/MACD/MA + one-line recommendation ≤1500 chars | Read-only, no writes |
-| Contains "准确率" / "回溯" / "历史" / "verify" | Read `recommendations.csv`, output accuracy stats ≤2000 chars | Read-only |
-| Contains "报告" | Read latest file from `reports/`, push to Feishu | Read-only |
-| Contains "help" / "帮助" / "命令" | Return command list directly, do NOT invoke Claude Code | Zero cost |
-| Anything else | General investment Q&A, Claude Code answers freely ≤2000 chars | Read-only |
+When invoked via feishu-listener, the prompt instructs: "直接输出你的回复内容（markdown 格式，中文），不要说你已发送消息。listener 会负责把回复推到飞书。"
+
+Claude simply outputs markdown content to stdout. The listener captures it and handles Feishu delivery. Do NOT call lark-cli yourself — the listener owns all Feishu I/O.
+
+### Behavior Guidelines for On-Demand Queries
+
+1. **自然语言理解**: Understand the user's intent naturally — no fixed keyword matching
+2. **只读优先**: On-demand queries are read-only by default. Do NOT write to `recommendations.csv` or `reports/`
+3. **长度控制**: Keep responses concise — typically ≤2000 chars for Q&A, ≤3000 chars for full portfolio analysis
+4. **上下文延续**: `--session-id` persists conversation context. Users can ask follow-up questions naturally
+5. **命令可用性**: Users may ask for help — tell them about: 分析/持仓/诊断, 查个股, 准确率/回溯, 报告, 异动提醒
+6. **异动提醒开关**: Toggle via `.alert-enabled` file: `touch` to enable, `rm` to disable
 
 **Critical**: on-demand queries NEVER write to `recommendations.csv`. The feedback loop is only fed by scheduled analyses.
-
-### How to Send Feishu Messages
-
-```bash
-# Send to the whitelisted user (always use project profile)
-lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "message text"
-
-# For long messages, write to temp file then send
-echo "$LONG_MSG" > /tmp/feishu_response.txt
-lark-cli --profile finance-agent im send --user "$SENDER_ID" --msg "$(cat /tmp/feishu_response.txt)"
-```
 
 ## OpenBB Usage Pattern
 
 ```python
 from openbb import obb
 import os
+import pandas as pd
 
 # Configure credentials (or rely on env vars OPENBB_FMP_API_KEY)
 obb.user.credentials.fmp_api_key = os.environ.get("OPENBB_FMP_API_KEY")
 
-# Price snapshot
-quote = obb.equity.price.quote("AAPL", provider="fmp")
+# OBBject 需调用 .to_dataframe() 才能拿到 DataFrame
+# FMP quote fields: last_price, change_percent, ma50, ma200, market_cap
+quote_df = obb.equity.price.quote("AAPL", provider="fmp").to_dataframe()
 
-# Historical prices (1 year daily)
-hist = obb.equity.price.historical("AAPL", provider="fmp", start_date="2024-01-01")
+# FMP historical: OHLCV DataFrame
+hist_df = obb.equity.price.historical("AAPL", provider="fmp",
+    start_date="2025-01-01", end_date="2026-05-01").to_dataframe()
 
-# Fundamentals
-profile = obb.equity.fundamental.profile("AAPL", provider="fmp")
+# Fundamentals: FMP 没有 profile 接口, 用 metrics 或 ratios
+metrics = obb.equity.fundamental.metrics("AAPL", provider="fmp", limit=1)
+ratios = obb.equity.fundamental.ratios("AAPL", provider="fmp", limit=1)
+# PE/PB 也可以用 yfinance 补充:
+import yfinance as yf
+info = yf.Ticker("AAPL").info
+pe, pb = info.get("trailingPE"), info.get("priceToBook")
 
+# FMP 免费层不支持 ETF(如 VOO) → fallback 到 yfinance
 # If FMP fails, retry with yfinance:
-# quote = obb.equity.price.quote("AAPL", provider="yfinance")
+# quote_df = obb.equity.price.quote("AAPL", provider="yfinance").to_dataframe()
 ```
+
+**FMP 关键注意事项:**
+- OBBject 不支持 `len()` / `iloc[]`，必须先 `.to_dataframe()`
+- 字段名是 `last_price` 不是 `price`，`change_percent` 不是 `changes_percentage`
+- 免费层不支持 ETF 标的（VOO 等会报 402）→ 个股走 FMP，ETF 走 yfinance
+- `obb.equity.fundamental.profile` 不存在于 FMP provider
 
 Always prefer FMP provider first, fallback to yfinance. Log each fetch attempt in `agent.log`.
 
@@ -304,10 +312,10 @@ Default model is DeepSeek V4 via cc-switch (cost ~¥0.10 per scheduled run). For
 
 ## CI
 
-CI runs shellcheck on `scripts/` and validates YAML syntax. Triggered on push/PR to `main`.
+CI runs Python syntax validation on `scripts/` and validates YAML syntax. Triggered on push/PR to `main`.
 
 ```bash
 # Run locally
-shellcheck scripts/*.sh
+python3 -m py_compile scripts/*.py
 python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
 ```

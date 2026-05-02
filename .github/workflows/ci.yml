@@ -17,16 +17,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Shellcheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: './scripts'
-          format: tty
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Check Python syntax
+        run: |
+          for f in scripts/*.py; do
+            python -m py_compile "$f" && echo "$f OK"
+          done
 
       - name: Check YAML syntax
         run: |
