@@ -94,6 +94,10 @@ Fetch once globally: S&P 500, VIX, 10Y yield, Fed funds rate (FRED).
 
 **Rate limit**: max 5 API calls per symbol per run. Total ~10–20 calls/run. Space calls ≥1 second apart. If FMP returns rate-limit error, switch to yfinance for that call.
 
+### Step 3.5 — Price Anomaly Detection
+
+检查 `.alert_enabled` 标记文件是否存在。若不存在，跳过此步。若存在，读取 `scripts/alert_config.sh` 获取阈值（默认 ±5%），遍历所有持仓标的检查 `|change_pct| >= 阈值`，记录触发异动的标的（名称、当前价、涨跌幅含正负号、触发阈值），供 Step 7a 使用。若所有标的均未触发，记录"今日无价格异动"。向后兼容旧 `.alert-enabled` 文件命名（自动迁移为 `.alert_enabled`）。
+
 ### Step 4 — Verify History + Analyze
 
 First, verify pending recommendations:
@@ -127,9 +131,17 @@ Write to `reports/analysis-YYYY-MM-DD-HHmm.md`. Must include:
 
 Append new recommendations to `recommendations.csv` with `status=pending`. Use the next sequential `id`.
 
-### Step 7 — Push & Archive
+### Step 7a — Anomaly Push
 
-Push the report summary to Feishu via `lark-cli --profile finance-agent im send`. Full report stays in `reports/`. Log end-of-run to `agent.log`. Release lock.
+仅当 Step 3.5 有触发异动的标的时执行。通过 `lark-cli --profile finance-agent --as bot im +messages-send` 发送独立异动提醒消息到飞书。消息格式：`🚨 价格异动提醒\n当前阈值: ±N%\n\n• SYMBOL 现价 $X (↑/↓X%) 触发阈值 ±N%`，多只以 `---` 分隔。若无触发标的，跳过此步。
+
+### Step 7b — Report Push
+
+Push the report summary to Feishu via `lark-cli --profile finance-agent im send`. Full report stays in `reports/`.
+
+### Step 7c — Log
+
+Log end-of-run to `agent.log`. Release lock.
 
 ## Path B: Feishu On-Demand Interaction
 
