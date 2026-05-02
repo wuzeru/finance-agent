@@ -41,9 +41,11 @@ _is_first_check = True
 
 def _log(event: str, **extra) -> None:
     entry = {"ts": datetime.now().isoformat(), "event": event, **extra}
+    line = json.dumps(entry, ensure_ascii=False)
+    # 同时输出到 stderr (前台模式可见) + 日志文件
+    print(line, file=sys.stderr, flush=True)
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(entry, ensure_ascii=False)
         _rotate_if_needed()
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
