@@ -76,37 +76,61 @@ def send_reply(user_id: str, text: str) -> bool:
     return r.returncode == 0
 
 
-def get_session_id(user_id: str) -> tuple[str, bool]:
-    """从 .feishu_sessions/<open_id> 读取或创建持久化 session UUID"""
+def get_session_id(user_id: str) -> str:
+    """读取或创建持久化 session UUID"""
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     session_file = SESSION_DIR / user_id
     if session_file.exists():
-        return session_file.read_text().strip(), False
+        return session_file.read_text().strip()
     new_id = str(uuid.uuid4()).upper()
     session_file.write_text(new_id)
-    return new_id, True
+    return new_id
 
 
-def run_claude(user_id: str, content: str, session_id: str) -> str:
-    """调用 claude -p 生成回复，始终使用 --session-id"""
+def _new_session_id(user_id: str) -> str:
+    """生成新 session 并持久化"""
+    new_id = str(uuid.uuid4()).upper()
+    (SESSION_DIR / user_id).write_text(new_id)
+    return new_id
+
+
+def run_claude(user_id: str, content: str, session_id: str) -> tuple[str, str]:
+    """调用 claude -p, 返回 (reply, session_id). 若 session 被占用则自动换新重试."""
     prompt = (
         f"飞书用户 {user_id} 说: {content}。"
         "直接输出你的回复内容（markdown 格式，中文），"
         "不要说你已发送消息。listener 会负责把回复推到飞书。"
     )
-    r = subprocess.run(
-        [
-            "claude", "-p",
-            "--session-id", session_id,
-            "--permission-mode", "bypassPermissions",
-            "--dangerously-skip-permissions",
-            prompt,
-        ],
-        capture_output=True,
-        stdin=subprocess.DEVNULL,
-        cwd=PROJECT_ROOT,
-    )
-    return r.stdout.decode("utf-8", errors="replace").strip()
+    for attempt in range(2):
+        r = subprocess.run(
+            [
+                "claude", "-p",
+                "--session-id", session_id,
+                "--permission-mode", "bypassPermissions",
+                "--dangerously-skip-permissions",
+                prompt,
+            ],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            cwd=PROJECT_ROOT,
+            env=ENV,
+        )
+        reply = r.stdout.decode("utf-8", errors="replace").strip()
+        if reply:
+            return reply, session_id
+
+        stderr_text = r.stderr.decode(errors="replace")
+        if r.returncode != 0:
+            log(f"[claude] exit={r.returncode} stderr={stderr_text[:500]}")
+
+        if "already in use" in stderr_text and attempt == 0:
+            session_id = _new_session_id(user_id)
+            log(f"[claude] session 被占用, 换新: {session_id}")
+            continue
+
+        break
+
+    return "", session_id
 
 
 def acquire_lock() -> bool:
@@ -216,14 +240,11 @@ def main():
                 continue
 
             try:
-                session_id, is_new = get_session_id(sender_id)
-                if is_new:
-                    log(f"[session] new session created for {sender_id}: {session_id}")
-                else:
-                    log(f"[session] resuming session for {sender_id}: {session_id}")
+                session_id = get_session_id(sender_id)
+                log(f"[session] using session {sender_id}: {session_id}")
 
                 log("[claude] thinking...")
-                reply = run_claude(sender_id, content, session_id)
+                reply, session_id = run_claude(sender_id, content, session_id)
                 log("[claude] done")
 
                 if reply:
