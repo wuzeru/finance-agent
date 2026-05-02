@@ -15,7 +15,7 @@ if crontab -l 2>/dev/null | grep -qF "$DAEMON"; then
 else
     echo "[start.sh] 安装 @reboot cron 条目 ..."
     tmp=$(mktemp)
-    crontab -l 2>/dev/null || true > "$tmp"
+    crontab -l > "$tmp" 2>/dev/null || true > "$tmp"
     echo "@reboot /opt/homebrew/bin/python3 $DAEMON >> $PROJECT/logs/daemon-cron.log 2>&1 $CRON_MARKER" >> "$tmp"
     crontab "$tmp"
     rm -f "$tmp"

@@ -133,14 +133,18 @@ def _fire_analysis() -> None:
 
 def _launch_listener() -> Optional[subprocess.Popen]:
     script = PROJECT_ROOT / "scripts" / "feishu-listener.py"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
     _log("listener_launch")
     try:
-        return subprocess.Popen(
+        err_f = open(LOG_DIR / "listener.log", "a", encoding="utf-8")
+        proc = subprocess.Popen(
             [sys.executable, str(script)],
             cwd=str(PROJECT_ROOT),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=err_f,
         )
+        err_f.close()  # child inherited the fd; parent doesn't need it
+        return proc
     except Exception as e:
         _log("listener_launch_failed", error=str(e))
         return None
