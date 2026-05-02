@@ -44,18 +44,19 @@ def preflight() -> bool:
         log("[FATAL] lark-cli 未安装")
         return False
 
-    r = subprocess.run(
-        ["lark-cli", "--profile", "finance-agent", "contact", "+get-user"],
-        capture_output=True,
-    )
-    if r.returncode != 0:
-        log("[FATAL] finance-agent profile 未登录")
-        return False
-
     for key in ("ALLOWED_OPEN_ID", "FEISHU_APP_ID", "FEISHU_APP_SECRET"):
         if key not in ENV:
             log(f"[FATAL] {key} must be set in .env")
             return False
+
+    r = subprocess.run(
+        ["lark-cli", "--profile", "finance-agent", "--as", "bot",
+         "contact", "+get-user", "--user-id", ENV["ALLOWED_OPEN_ID"]],
+        capture_output=True, env=ENV,
+    )
+    if r.returncode != 0:
+        log(f"[FATAL] 飞书 bot 连通性检查失败: {r.stderr.decode().strip()}")
+        return False
 
     return True
 
