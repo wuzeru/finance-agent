@@ -100,6 +100,7 @@ def run_claude(user_id: str, content: str, session_id: str) -> tuple[str, str]:
         f"飞书用户 {user_id} 说: {content}。"
         "直接输出你的回复内容（markdown 格式，中文），"
         "不要说你已发送消息。listener 会负责把回复推到飞书。"
+        "注意：飞书 IM 不支持 markdown 表格，请用列表或分段文字代替表格。"
     )
     for attempt in range(2):
         r = subprocess.run(
