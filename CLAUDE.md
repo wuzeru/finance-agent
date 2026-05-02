@@ -94,6 +94,10 @@ Fetch once globally: S&P 500, VIX, 10Y yield, Fed funds rate (FRED).
 
 **Rate limit**: max 5 API calls per symbol per run. Total ~10–20 calls/run. Space calls ≥1 second apart. If FMP returns rate-limit error, switch to yfinance for that call.
 
+### Step 3.5 — Price Anomaly Detection
+
+检查 `.alert_enabled` 标记文件是否存在。若不存在，跳过此步。若存在，读取 `scripts/alert_config.sh` 获取阈值（默认 ±5%），遍历所有持仓标的检查 `|change_pct| >= 阈值`，记录触发异动的标的（名称、当前价、涨跌幅含正负号、触发阈值），供 Step 7a 使用。若所有标的均未触发，记录"今日无价格异动"。向后兼容旧 `.alert-enabled` 文件命名（自动迁移为 `.alert_enabled`）。
+
 ### Step 4 — Verify History + Analyze
 
 First, verify pending recommendations:
@@ -127,9 +131,17 @@ Write to `reports/analysis-YYYY-MM-DD-HHmm.md`. Must include:
 
 Append new recommendations to `recommendations.csv` with `status=pending`. Use the next sequential `id`.
 
-### Step 7 — Push & Archive
+### Step 7a — Anomaly Push
 
-Push the report summary to Feishu via `lark-cli --profile finance-agent im send`. Full report stays in `reports/`. Log end-of-run to `agent.log`. Release lock.
+仅当 Step 3.5 有触发异动的标的时执行。通过 `lark-cli --profile finance-agent --as bot im +messages-send` 发送独立异动提醒消息到飞书。消息格式：`🚨 价格异动提醒\n当前阈值: ±N%\n\n• SYMBOL 现价 $X (↑/↓X%) 触发阈值 ±N%`，多只以 `---` 分隔。若无触发标的，跳过此步。
+
+### Step 7b — Report Push
+
+Push the report summary to Feishu via `lark-cli --profile finance-agent im send`. Full report stays in `reports/`.
+
+### Step 7c — Log
+
+Log end-of-run to `agent.log`. Release lock.
 
 ## Path B: Feishu On-Demand Interaction
 
@@ -148,9 +160,45 @@ Claude simply outputs markdown content to stdout. The listener captures it and h
 3. **长度控制**: Keep responses concise — typically ≤2000 chars for Q&A, ≤3000 chars for full portfolio analysis
 4. **上下文延续**: `--session-id` persists conversation context. Users can ask follow-up questions naturally
 5. **命令可用性**: Users may ask for help — tell them about: 分析/持仓/诊断, 查个股, 准确率/回溯, 报告, 异动提醒
-6. **异动提醒开关**: Toggle via `.alert-enabled` file: `touch` to enable, `rm` to disable
+6. **异动提醒开关**: Toggle via `.alert_enabled` file: `touch` to enable, `rm` to disable
 
 **Critical**: on-demand queries NEVER write to `recommendations.csv`. The feedback loop is only fed by scheduled analyses.
+
+## 价格异动提醒
+
+### 开关操作
+
+用户可通过自然语言控制异动提醒功能的开关：
+
+- **开启**（飞书消息：如 "异动提醒开" / "开启异动通知"）→ 执行 `touch .alert_enabled`
+- **关闭**（飞书消息：如 "异动提醒关" / "关闭异动提醒"）→ 执行 `rm -f .alert_enabled`
+- **状态查询**（飞书消息：如 "异动提醒状态"）→ 执行 `test -f .alert_enabled && echo "已开启" || echo "已关闭"`
+
+### 配置文件
+
+阈值配置在 `scripts/alert_config.sh`：
+```bash
+ANOMALY_THRESHOLD=5  # 涨跌幅绝对值 ≥ 此百分比即触发异动提醒
+```
+
+读取方式：`source scripts/alert_config.sh 2>/dev/null; echo ${ANOMALY_THRESHOLD:-5}`
+
+### 提醒消息格式
+
+当 Path A 定时分析检测到价格异动时，会通过飞书发送一条独立消息：
+
+```
+🚨 价格异动提醒
+当前阈值: ±5%
+
+• AAPL 现价 $185.32 (↑7.2%) 触发阈值 ±5%
+---
+• TSLA 现价 $210.50 (↓6.1%) 触发阈值 ±5%
+```
+
+- 涨用 `↑` + 涨幅，跌用 `↓` + 跌幅
+- 多只标的以 `---` 分隔
+- 若所有标的均未触发，不发送此消息，报告内注明 "今日无价格异动"
 
 ## OpenBB Usage Pattern
 
