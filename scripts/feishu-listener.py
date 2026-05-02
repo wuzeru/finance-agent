@@ -162,9 +162,14 @@ def main():
             if event.get("type") != "im.message.receive_v1":
                 continue
 
-            content = event.get("content", "")
-            sender_id = event.get("sender_id", "")
-            msg_id = event.get("message_id", "")
+            sender_id = event.get("sender", {}).get("open_id", "")
+            msg_id = event.get("message", {}).get("message_id", "")
+            content_raw = event.get("message", {}).get("content", "")
+            # content 是 JSON 字符串，如 '{"text": "..."}'
+            try:
+                content = json.loads(content_raw).get("text", content_raw)
+            except (json.JSONDecodeError, AttributeError):
+                content = content_raw
 
             log(f"[event #{event_count}] {line}")
             log(f"[parsed] sender={sender_id} msg={msg_id} content={content}")
