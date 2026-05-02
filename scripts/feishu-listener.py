@@ -83,45 +83,188 @@ def preflight() -> bool:
     return True
 
 
-def _table_to_text(text: str) -> str:
-    """将 markdown 表格转为飞书兼容的列表格式 (post 不支持 table 标签)"""
-    lines = text.split("\n")
-    out, headers, in_table = [], [], False
+# ── 飞书交互式卡片（表格渲染） ──────────────────────────────────
+
+# 飞书卡片 elements 数组上限 ~50，保留余量设为 45
+MAX_CARD_ELEMENTS = 45
+
+
+def _markdown_to_card_json(md_text: str) -> dict:
+    """将 markdown 文本（含表格）转换为飞书交互式卡片 JSON。
+
+    文本段落 → div + lark_md；表格 → column_set（表头蓝底加粗、斑马纹数据行）。
+    """
+    blocks = _parse_md_blocks(md_text)
+    elements = []
+
+    for block_type, content in blocks:
+        if block_type == "text":
+            text = content.strip()
+            if text:
+                elements.append(_text_to_div(text))
+        elif block_type == "table":
+            elements.extend(_parsed_table_to_column_sets(content))
+
+    if len(elements) > MAX_CARD_ELEMENTS:
+        elements = elements[:MAX_CARD_ELEMENTS]
+        elements.append(_text_to_div("⚠️ 内容过长，已截断"))
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "Finance Agent"},
+        },
+        "elements": elements,
+    }
+
+
+def _parse_md_blocks(md_text: str) -> list:
+    """将 markdown 解析为 [(type, content), ...] 块列表。"""
+    lines = md_text.split("\n")
+    blocks = []
+    current = []
+    in_table = False
+
     for line in lines:
-        s = line.strip()
-        if s.startswith("|") and s.endswith("|"):
-            if not in_table:
-                in_table = True
-                headers = [c.strip() for c in s.split("|")[1:-1]]
-                continue
-            if set(s.replace(" ", "").replace("|", "")) <= {"-", ":"}:
-                continue
-            cells = [c.strip() for c in s.split("|")[1:-1]]
-            row = " | ".join(f"{h}: {c}" for h, c in zip(headers, cells))
-            out.append(row)
-        else:
-            if in_table:
-                out.append("")  # 表格后加空行
+        stripped = line.strip()
+        is_table_line = stripped.startswith("|") and stripped.endswith("|")
+
+        if is_table_line and not in_table:
+            if current:
+                blocks.append(("text", "\n".join(current)))
+                current = []
+            in_table = True
+            current.append(line)
+        elif is_table_line and in_table:
+            current.append(line)
+        elif not is_table_line and in_table:
+            try:
+                blocks.append(("table", _parse_table_lines(current)))
+            except ValueError:
+                blocks.append(("text", "\n".join(current)))
+            current = [line]
             in_table = False
-            out.append(line)
-    return "\n".join(out)
+        else:
+            current.append(line)
+
+    if current:
+        if in_table:
+            try:
+                blocks.append(("table", _parse_table_lines(current)))
+            except ValueError:
+                blocks.append(("text", "\n".join(current)))
+        else:
+            blocks.append(("text", "\n".join(current)))
+
+    return blocks
+
+
+def _parse_table_lines(lines: list) -> dict:
+    """解析原始表格行 → {"headers": [...], "rows": [[...], ...]}。"""
+    headers = []
+    rows = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        cells = [c.strip() for c in stripped.split("|")[1:-1]]
+
+        if i == 0:
+            if not cells:
+                raise ValueError("Empty table header")
+            headers = cells
+        elif i == 1:
+            # 分隔符行（|---|:---| 等）跳过
+            non_sep = set(stripped.replace(" ", "").replace("|", ""))
+            if non_sep <= {"-", ":"}:
+                continue
+            rows.append(cells)
+        else:
+            rows.append(cells)
+
+    if not headers:
+        raise ValueError("No headers found")
+    return {"headers": headers, "rows": rows}
+
+
+def _text_to_div(text: str) -> dict:
+    """文本块 → 卡片 div 元素（lark_md 渲染）。"""
+    return {"tag": "div", "text": {"tag": "lark_md", "content": text}}
+
+
+def _parsed_table_to_column_sets(parsed_table: dict) -> list:
+    """解析后的表格 → column_set 元素列表（表头蓝底加粗，数据行斑马纹）。"""
+    headers = parsed_table["headers"]
+    rows = parsed_table["rows"]
+    num_cols = len(headers)
+    elements = []
+
+    # 表头行 (蓝底加粗)
+    header_cols = [_make_column(h, bold=True) for h in headers]
+    elements.append({
+        "tag": "column_set",
+        "flex_mode": "none",
+        "background_style": "blue",
+        "columns": header_cols,
+    })
+
+    # 数据行 (交替斑马纹)
+    for row_idx, row in enumerate(rows):
+        padded = row + [""] * (num_cols - len(row))
+        bg = "default" if row_idx % 2 == 0 else "grey"
+        cols = [_make_column(cell) for cell in padded]
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "none",
+            "background_style": bg,
+            "columns": cols,
+        })
+
+    return elements
+
+
+def _make_column(content: str, bold: bool = False) -> dict:
+    """创建 column_set 中的单列元素。"""
+    text = f"**{content}**" if bold else content
+    return {
+        "tag": "column",
+        "width": "weighted",
+        "weight": 1,
+        "vertical_align": "center",
+        "elements": [{
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": text},
+        }],
+    }
+
+
+# ── 消息发送 ──────────────────────────────────────────────────
 
 
 def send_reply(user_id: str, text: str) -> bool:
-    """用 lark-cli 发送消息到飞书，表格自动转列表"""
-    # 检测并转换表格
-    processed = _table_to_text(text)
+    """用 lark-cli 发送交互式卡片消息（表格用 column_set 渲染）。"""
+    try:
+        card = _markdown_to_card_json(text)
+        card_json = json.dumps(card, ensure_ascii=False, separators=(",", ":"))
+    except Exception as exc:
+        log(f"[card] 卡片 JSON 构建失败: {exc}")
+        return False
+
     r = subprocess.run(
         [
             "lark-cli", "--profile", "finance-agent",
             "--as", "bot", "im", "+messages-send",
             "--user-id", user_id,
-            "--markdown", processed,
+            "--msg-type", "interactive",
+            "--content", card_json,
         ],
         capture_output=True,
         env=ENV,
     )
-    return r.returncode == 0
+    if r.returncode != 0:
+        log(f"[send] lark-cli 失败: {r.stderr.decode(errors='replace')[:300]}")
+        return False
+    return True
 
 
 def get_session_id(user_id: str) -> str:
