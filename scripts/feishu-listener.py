@@ -5,6 +5,7 @@ feishu-listener.py — 飞书消息监听守护进程
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -36,6 +37,27 @@ ENV = {**os.environ, **dotenv()}
 
 def log(msg: str):
     print(msg, file=sys.stderr, flush=True)
+
+
+def _kill_stale_subscriptions():
+    """杀死所有残留的 lark-cli event +subscribe 进程"""
+    try:
+        r = subprocess.run(
+            ["pgrep", "-f", "lark-cli.*event.*subscribe"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            for pid in r.stdout.strip().split("\n"):
+                pid = pid.strip()
+                if not pid:
+                    continue
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                    log(f"[cleanup] killed stale subscription pid={pid}")
+                except (OSError, ValueError):
+                    pass
+    except Exception:
+        pass
 
 
 def preflight() -> bool:
@@ -179,6 +201,10 @@ def main():
     if not preflight():
         sys.exit(1)
 
+    # 先清理残留订阅 (避免 "already in use" 错误)
+    _kill_stale_subscriptions()
+    time.sleep(2)  # 等 Feishu 服务端感知连接断开
+
     allowed = ENV["ALLOWED_OPEN_ID"]
     event_count = 0
 
@@ -190,7 +216,7 @@ def main():
             "lark-cli", "--profile", "finance-agent", "--as", "bot",
             "event", "+subscribe",
             "--event-types", "im.message.receive_v1,im.message.reaction.created_v1",
-            "--compact", "--quiet", "--force",
+            "--compact", "--quiet",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
