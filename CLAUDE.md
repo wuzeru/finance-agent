@@ -15,8 +15,8 @@ When you (Claude Code) are invoked in this directory, you are expected to drive 
 ```
 Path A (Scheduled Push)              Path B (On-demand Pull)
 
-launchd → run-analysis.py            launchd → feishu-listener.py → lark-event WebSocket
-    ↓                                      ↓ (always-on)
+daemon.py → run-analysis.py          daemon.py → feishu-listener.py → lark-event WebSocket
+    ↓                                      ↓ (supervised, auto-restart)
 Claude Code full 7-step workflow     Claude Code 自然语言理解 + 回复
     ↓                                      ↓
 report → Feishu push → archive       listener 捕获 stdout → 飞书回复
@@ -75,7 +75,7 @@ Every significant event gets a JSON line with `ts` and `event` fields. Track: se
 
 ## Path A: Scheduled Analysis Workflow (7 Steps)
 
-When invoked via `scripts/run-analysis.py` (launchd trigger, weekdays 9:00 / 13:00):
+When invoked via `scripts/run-analysis.py` (daemon scheduler trigger, weekdays 9:00 / 13:00):
 
 ### Step 1 — Acquire Lock
 
