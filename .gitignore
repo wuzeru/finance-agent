@@ -10,3 +10,4 @@ agent.log
 logs/
 reports/
 .DS_Store
+.daemon.pid
