@@ -148,9 +148,45 @@ Claude simply outputs markdown content to stdout. The listener captures it and h
 3. **长度控制**: Keep responses concise — typically ≤2000 chars for Q&A, ≤3000 chars for full portfolio analysis
 4. **上下文延续**: `--session-id` persists conversation context. Users can ask follow-up questions naturally
 5. **命令可用性**: Users may ask for help — tell them about: 分析/持仓/诊断, 查个股, 准确率/回溯, 报告, 异动提醒
-6. **异动提醒开关**: Toggle via `.alert-enabled` file: `touch` to enable, `rm` to disable
+6. **异动提醒开关**: Toggle via `.alert_enabled` file: `touch` to enable, `rm` to disable
 
 **Critical**: on-demand queries NEVER write to `recommendations.csv`. The feedback loop is only fed by scheduled analyses.
+
+## 价格异动提醒
+
+### 开关操作
+
+用户可通过自然语言控制异动提醒功能的开关：
+
+- **开启**（飞书消息：如 "异动提醒开" / "开启异动通知"）→ 执行 `touch .alert_enabled`
+- **关闭**（飞书消息：如 "异动提醒关" / "关闭异动提醒"）→ 执行 `rm -f .alert_enabled`
+- **状态查询**（飞书消息：如 "异动提醒状态"）→ 执行 `test -f .alert_enabled && echo "已开启" || echo "已关闭"`
+
+### 配置文件
+
+阈值配置在 `scripts/alert_config.sh`：
+```bash
+ANOMALY_THRESHOLD=5  # 涨跌幅绝对值 ≥ 此百分比即触发异动提醒
+```
+
+读取方式：`source scripts/alert_config.sh 2>/dev/null; echo ${ANOMALY_THRESHOLD:-5}`
+
+### 提醒消息格式
+
+当 Path A 定时分析检测到价格异动时，会通过飞书发送一条独立消息：
+
+```
+🚨 价格异动提醒
+当前阈值: ±5%
+
+• AAPL 现价 $185.32 (↑7.2%) 触发阈值 ±5%
+---
+• TSLA 现价 $210.50 (↓6.1%) 触发阈值 ±5%
+```
+
+- 涨用 `↑` + 涨幅，跌用 `↓` + 跌幅
+- 多只标的以 `---` 分隔
+- 若所有标的均未触发，不发送此消息，报告内注明 "今日无价格异动"
 
 ## OpenBB Usage Pattern
 
