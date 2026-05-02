@@ -61,14 +61,40 @@ def preflight() -> bool:
     return True
 
 
+def _table_to_text(text: str) -> str:
+    """将 markdown 表格转为飞书兼容的列表格式 (post 不支持 table 标签)"""
+    lines = text.split("\n")
+    out, headers, in_table = [], [], False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("|") and s.endswith("|"):
+            if not in_table:
+                in_table = True
+                headers = [c.strip() for c in s.split("|")[1:-1]]
+                continue
+            if set(s.replace(" ", "").replace("|", "")) <= {"-", ":"}:
+                continue
+            cells = [c.strip() for c in s.split("|")[1:-1]]
+            row = " | ".join(f"{h}: {c}" for h, c in zip(headers, cells))
+            out.append(row)
+        else:
+            if in_table:
+                out.append("")  # 表格后加空行
+            in_table = False
+            out.append(line)
+    return "\n".join(out)
+
+
 def send_reply(user_id: str, text: str) -> bool:
-    """用 lark-cli 发送 markdown 消息到飞书"""
+    """用 lark-cli 发送消息到飞书，表格自动转列表"""
+    # 检测并转换表格
+    processed = _table_to_text(text)
     r = subprocess.run(
         [
             "lark-cli", "--profile", "finance-agent",
             "--as", "bot", "im", "+messages-send",
             "--user-id", user_id,
-            "--markdown", text,
+            "--markdown", processed,
         ],
         capture_output=True,
         env=ENV,
@@ -100,7 +126,6 @@ def run_claude(user_id: str, content: str, session_id: str) -> tuple[str, str]:
         f"飞书用户 {user_id} 说: {content}。"
         "直接输出你的回复内容（markdown 格式，中文），"
         "不要说你已发送消息。listener 会负责把回复推到飞书。"
-        "注意：飞书 IM 不支持 markdown 表格，请用列表或分段文字代替表格。"
     )
     for attempt in range(2):
         r = subprocess.run(
