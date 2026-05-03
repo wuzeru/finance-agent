@@ -1,9 +1,0 @@
-symbol,name,type,quantity,avg_cost,currency,exchange,notes
-LI,理想汽车,stock,869,24.711,USD,NASDAQ,中概新能源
-CRCL,Circle,stock,69,140.747,USD,NASDAQ,区块链基础设施
-HOOD,Robinhood,stock,91,93.313,USD,NASDAQ,零售券商平台
-FIG,Figma,stock,95,72.733,USD,NASDAQ,设计协作工具
-KULR,KULR Technology,stock,400,6.408,USD,NYSE,电池安全技术
-GAME,GameSquare,stock,850,1.463,USD,NASDAQ,电竞游戏
-TRON,Tron Inc,stock,191,4.862,USD,NASDAQ,区块链技术
-GEMI,Gemini Space,stock,9,44.00,USD,NASDAQ,航天技术
