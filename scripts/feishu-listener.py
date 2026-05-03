@@ -106,7 +106,8 @@ def _markdown_to_card_json(md_text: str) -> dict:
             elements.extend(_parsed_table_to_column_sets(content))
 
     if len(elements) > MAX_CARD_ELEMENTS:
-        elements = elements[:MAX_CARD_ELEMENTS]
+        # 为截断提示预留 1 个位置，避免 append 后超过上限
+        elements = elements[:MAX_CARD_ELEMENTS - 1]
         elements.append(_text_to_div("⚠️ 内容过长，已截断"))
 
     return {
@@ -210,7 +211,9 @@ def _parsed_table_to_column_sets(parsed_table: dict) -> list:
 
     # 数据行 (交替斑马纹)
     for row_idx, row in enumerate(rows):
-        padded = row + [""] * (num_cols - len(row))
+        # 截断超出的单元格并补齐不足列，保证每行列数与表头一致
+        padded = (row[:num_cols] if len(row) > num_cols
+                  else row + [""] * (num_cols - len(row)))
         bg = "default" if row_idx % 2 == 0 else "grey"
         cols = [_make_column(cell) for cell in padded]
         elements.append({
