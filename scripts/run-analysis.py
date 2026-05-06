@@ -160,6 +160,8 @@ portfolio = [
     {"symbol": "VOO", "market": "us"},
     {"symbol": "TSLA", "market": "us"},
     {"symbol": "HKG:0700", "market": "hk"},
+    {"symbol": "SGE_AU9999", "type": "commodity"},
+    {"symbol": "002611", "type": "fund"},
 ]
 
 results = {}
@@ -265,42 +267,111 @@ def fetch_us(symbol):
 def fetch_hk(code):
     """HK stocks: akshare East Money -> Sina fallback"""
     import akshare as ak
-    today = datetime.now().strftime("%Y%m%d")
-    start = (pd.Timestamp.now() - pd.Timedelta(days=400)).strftime("%Y%m%d")
     try:
-        df = ak.stock_hk_hist(symbol=code, period="daily", start_date=start, end_date=today, adjust="qfq")
-    except Exception as e:
-        if "connection" in str(e).lower() or "timeout" in str(e).lower():
-            df = ak.stock_hk_daily(symbol=code, adjust="qfq")
-            df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
-            df = df[(df["date"] >= start) & (df["date"] <= today)]
-            df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
-                                     "low": "最低", "close": "收盘", "volume": "成交量"})
-            source = "akshare_sina"
+        today = datetime.now().strftime("%Y%m%d")
+        start = (pd.Timestamp.now() - pd.Timedelta(days=400)).strftime("%Y%m%d")
+        try:
+            df = ak.stock_hk_hist(symbol=code, period="daily", start_date=start, end_date=today, adjust="qfq")
+        except Exception as e:
+            if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                df = ak.stock_hk_daily(symbol=code, adjust="qfq")
+                df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+                df = df[(df["date"] >= start) & (df["date"] <= today)]
+                df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
+                                         "low": "最低", "close": "收盘", "volume": "成交量"})
+                source = "akshare_sina"
+            else:
+                raise
         else:
-            raise
-    else:
-        source = "akshare_em"
-    close = df["收盘"].astype(float)
-    price = float(close.iloc[-1])
-    change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else 0
-    ma20 = float(close.rolling(20).mean().iloc[-1])
-    ma50 = float(close.rolling(50).mean().iloc[-1])
-    ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
-    rsi = float(calc_rsi(close).iloc[-1])
-    upper, mid, lower = calc_bollinger(close)
-    macd, signal, hist_macd = calc_macd(close)
-    return {
-        "source": source, "price": price, "change_pct": change_pct,
-        "ma20": ma20, "ma50": ma50, "ma200": ma200,
-        "rsi_14": rsi,
-        "bollinger_upper": float(upper.iloc[-1]),
-        "bollinger_mid": float(mid.iloc[-1]),
-        "bollinger_lower": float(lower.iloc[-1]),
-        "macd_line": float(macd.iloc[-1]),
-        "macd_signal": float(signal.iloc[-1]),
-        "macd_hist": float(hist_macd.iloc[-1]),
-    }
+            source = "akshare_em"
+        close = df["收盘"].astype(float)
+        price = float(close.iloc[-1])
+        change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else 0
+        ma20 = float(close.rolling(20).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
+        rsi = float(calc_rsi(close).iloc[-1])
+        upper, mid, lower = calc_bollinger(close)
+        macd, signal, hist_macd = calc_macd(close)
+        return {
+            "source": source, "price": price, "change_pct": change_pct,
+            "ma20": ma20, "ma50": ma50, "ma200": ma200,
+            "rsi_14": rsi,
+            "bollinger_upper": float(upper.iloc[-1]),
+            "bollinger_mid": float(mid.iloc[-1]),
+            "bollinger_lower": float(lower.iloc[-1]),
+            "macd_line": float(macd.iloc[-1]),
+            "macd_signal": float(signal.iloc[-1]),
+            "macd_hist": float(hist_macd.iloc[-1]),
+        }
+    except Exception as e:
+        return {"source": "error", "error": str(e)}
+
+def fetch_gold_sge():
+    """SGE AU99.99 黄金基准价：akshare → 技术指标（无 fundamentals）"""
+    import akshare as ak
+    try:
+        df = ak.spot_golden_benchmark_sge()
+        # 自动识别价格列（列名可能随 akshare 版本变化）
+        if "value" in df.columns:
+            close = pd.Series(df["value"].astype(float))
+        elif "price" in df.columns:
+            close = pd.Series(df["price"].astype(float))
+        elif "close" in df.columns:
+            close = pd.Series(df["close"].astype(float))
+        else:
+            num_col = df.select_dtypes(include=[np.number]).columns[-1]
+            close = pd.Series(df[num_col].astype(float))
+        price = float(close.iloc[-1])
+        change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else 0
+        ma20 = float(close.rolling(20).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
+        rsi = float(calc_rsi(close).iloc[-1])
+        upper, mid, lower = calc_bollinger(close)
+        macd, signal, hist_macd = calc_macd(close)
+        return {
+            "source": "akshare_sge", "price": price, "change_pct": change_pct,
+            "ma20": ma20, "ma50": ma50, "ma200": ma200,
+            "rsi_14": rsi,
+            "bollinger_upper": float(upper.iloc[-1]),
+            "bollinger_mid": float(mid.iloc[-1]),
+            "bollinger_lower": float(lower.iloc[-1]),
+            "macd_line": float(macd.iloc[-1]),
+            "macd_signal": float(signal.iloc[-1]),
+            "macd_hist": float(hist_macd.iloc[-1]),
+        }
+    except Exception as e:
+        return {"source": "error", "error": str(e)}
+
+def fetch_cn_fund(code):
+    """国内基金净值：akshare fund_open_fund_info_em → 单位净值（无 fundamentals）"""
+    import akshare as ak
+    try:
+        df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
+        nav_col = "单位净值" if "单位净值" in df.columns else df.columns[-1]
+        close = pd.Series(df[nav_col].astype(float))
+        price = float(close.iloc[-1])
+        change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else 0
+        ma20 = float(close.rolling(20).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
+        rsi = float(calc_rsi(close).iloc[-1])
+        upper, mid, lower = calc_bollinger(close)
+        macd, signal, hist_macd = calc_macd(close)
+        return {
+            "source": "akshare_fund", "price": price, "change_pct": change_pct,
+            "ma20": ma20, "ma50": ma50, "ma200": ma200,
+            "rsi_14": rsi,
+            "bollinger_upper": float(upper.iloc[-1]),
+            "bollinger_mid": float(mid.iloc[-1]),
+            "bollinger_lower": float(lower.iloc[-1]),
+            "macd_line": float(macd.iloc[-1]),
+            "macd_signal": float(signal.iloc[-1]),
+            "macd_hist": float(hist_macd.iloc[-1]),
+        }
+    except Exception as e:
+        return {"source": "error", "error": str(e)}
 
 def fetch_macro():
     import yfinance as yf
@@ -312,18 +383,38 @@ def fetch_macro():
             macro[name] = info.get("regularMarketPrice") or info.get("previousClose")
         except Exception:
             macro[name] = None
+    # SGE 黄金基准价（宏观参考，仅最新价）
+    try:
+        import akshare as ak
+        df = ak.spot_golden_benchmark_sge()
+        num_col = df.select_dtypes(include=[np.number]).columns[-1]
+        macro["sge_gold"] = float(df[num_col].iloc[-1])
+    except Exception:
+        macro["sge_gold"] = None
     return macro
 
-# Fetch all
+# Fetch all — dispatch by type (commodity/fund/hk/us)
+gold_cache = None  # 多个 commodity 持仓共享同一 SGE 金价结果
+
 for holding in portfolio:
     sym = holding["symbol"]
+    htype = holding.get("type", "stock")
     print(f"Fetching {sym}...", file=sys.stderr)
-    if holding["market"] == "hk":
+
+    if htype == "commodity":
+        if gold_cache is None:
+            gold_cache = fetch_gold_sge()
+        results[sym] = gold_cache
+    elif htype == "fund":
+        results[sym] = fetch_cn_fund(sym)
+        time.sleep(1)
+    elif holding.get("market") == "hk":
         code = sym.split(":")[1]
         results[sym] = fetch_hk(code)
+        time.sleep(1)
     else:
         results[sym] = fetch_us(sym)
-    time.sleep(1)
+        time.sleep(1)
 
 results["macro"] = fetch_macro()
 print(json.dumps(results, ensure_ascii=False, default=str))
@@ -339,7 +430,7 @@ print(json.dumps(results, ensure_ascii=False, default=str))
             "先从 portfolio.csv 读取当前持仓，把 data_template 里的 symbols 替换为实际持仓标的，"
             "然后写入 /tmp/fetch_data.py 并运行"
             "在此基础上补充 fundamentals（PE/PB/市值）+ 宏观数据"
-            "（S&P 500, VIX, 10Y 收益率, 联邦基金利率）\n"
+            "（S&P 500, VIX, 10Y 收益率, 联邦基金利率, SGE 黄金基准价）\n"
             "- Step 3.5 (价格异动检测): 先检查 .alert_enabled 是否存在"
             " (test -f .alert_enabled)。"
             "若不存在，再检查旧命名 .alert-enabled（向后兼容）："

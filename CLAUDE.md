@@ -52,7 +52,9 @@ API keys in `.env` (gitignored):
 
 Columns: `symbol,name,type,quantity,avg_cost,currency,exchange,notes`
 
-- `type`: `stock` | `etf` | `bond` | `cash`
+- `type`: `stock` | `etf` | `bond` | `cash` | `commodity` | `fund`
+- `commodity`: 实物商品/积存金，symbol 为内部标识（如 `SGE_AU9999`），数据源为 SGE 金价
+- `fund`: 国内公募基金，symbol 为 6 位基金代码，数据源为 akshare 基金净值
 - `quantity`: > 0 (float)
 - `avg_cost`: cost basis including fees (float)
 - `currency`: `USD` | `HKD` | `CNY`
@@ -345,6 +347,56 @@ Run the integration test to confirm akshare is functional:
 ```bash
 source venv/bin/activate
 python scripts/test_akshare.py
+```
+
+## SGE Gold / Fund Data Sources
+
+For commodity gold holdings and domestic mutual fund holdings, use **akshare** as the data source. These asset types have no standard stock exchange data (no PE/PB/market cap, no OHLCV in the traditional sense).
+
+### SGE Gold Price (`fetch_gold_sge()`)
+
+Uses `ak.spot_golden_benchmark_sge()` to get SGE AU99.99 gold benchmark price (CNY/gram, morning fixing). Returns daily price series suitable for technical indicator calculation (MA, RSI, MACD, Bollinger Bands).
+
+```python
+import akshare as ak
+
+# SGE AU99.99 黄金基准价（早盘价 CNY/克）
+df = ak.spot_golden_benchmark_sge()
+# DataFrame 包含日期和价格列，列名可能随 akshare 版本变化
+# 代码自动识别价格列（value/price/close 或最后数值列）
+```
+
+- **No PE/PB/market_cap**: 商品无 basic fundamentals，不会在返回结果中生成这些字段
+- **缓存策略**: 多个 commodity 类型持仓共享同一 `fetch_gold_sge()` 结果，避免重复请求
+- **macro 补充**: `fetch_macro()` 也调用同一函数获取最新 SGE 金价作为宏观参考
+
+### Domestic Fund NAV (`fetch_cn_fund(code)`)
+
+Uses `ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")` to get the fund's unit NAV (net asset value) history.
+
+```python
+import akshare as ak
+
+# 基金单位净值走势
+df = ak.fund_open_fund_info_em(symbol="002611", indicator="单位净值走势")
+# 列名通常为 ['净值日期', '单位净值', '累计净值']
+```
+
+- **T+1 延迟**: 基金净值 T 日公布 T-1 日数据，`change_pct` 使用相邻数据点计算
+- **symbol 即基金代码**: 6 位数字字符串，直接用作 akshare 参数
+- **每个基金独立请求**: 使用 `time.sleep(1)` 限速，避免上游 IP 封禁
+- **无 PE/PB/market_cap**: 基金不返回 fundamentals 字段
+- **Returns same structure**: 价格 + 全部技术指标（MA20/50/200, RSI14, Bollinger, MACD）
+
+### Dispatch Logic by Type
+
+Data template 中的 dispatch 循环按 `type` 字段分发，不再仅按 `market` 字段：
+
+```
+type=commodity → fetch_gold_sge()（缓存共享）
+type=fund       → fetch_cn_fund(symbol)
+market=hk      → fetch_hk(code)（港股原有逻辑）
+default        → fetch_us(symbol)（美股原有逻辑）
 ```
 
 ## Model Selection
