@@ -390,12 +390,13 @@ df = ak.fund_open_fund_info_em(symbol="002611", indicator="单位净值走势")
 
 ### Dispatch Logic by Type
 
-Data template 中的 dispatch 循环按 `type` 字段分发，不再仅按 `market` 字段：
+Data template 中的 dispatch 循环按 `type` 字段分发，不再仅按 `market` 字段。
+注：`market` 是 data_template 临时字典中的字段（由 Claude 从 `portfolio.csv` 的 `exchange` 列或 `symbol` 前缀 `HKG:` 推导），不计入 `portfolio.csv` column schema。
 
 ```
-type=commodity → fetch_gold_sge()（缓存共享）
-type=fund       → fetch_cn_fund(symbol)
-market=hk      → fetch_hk(code)（港股原有逻辑）
+type=commodity → fetch_gold_sge()（缓存共享，仅缓存成功结果）
+type=fund       → fetch_cn_fund(symbol)（symbol 即 6 位基金代码）
+market=hk      → fetch_hk(code)（code 需 5 位补零如 00700）
 default        → fetch_us(symbol)（美股原有逻辑）
 ```
 

@@ -402,14 +402,14 @@ for holding in portfolio:
     print(f"Fetching {sym}...", file=sys.stderr)
 
     if htype == "commodity":
-        if gold_cache is None:
+        if gold_cache is None or gold_cache.get("source") == "error":
             gold_cache = fetch_gold_sge()
         results[sym] = gold_cache
     elif htype == "fund":
         results[sym] = fetch_cn_fund(sym)
         time.sleep(1)
     elif holding.get("market") == "hk":
-        code = sym.split(":")[1]
+        code = sym.split(":")[1].zfill(5)  # akshare 要求 5 位补零如 00700
         results[sym] = fetch_hk(code)
         time.sleep(1)
     else:
