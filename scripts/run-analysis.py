@@ -55,7 +55,7 @@ def preflight() -> bool:
         return False
 
     r = subprocess.run(
-        ["lark-cli", "--profile", "finance-agent", "contact", "+get-user"],
+        ["lark-cli", "--profile", "finance-agent", "auth", "status"],
         capture_output=True,
     )
     if r.returncode != 0:
