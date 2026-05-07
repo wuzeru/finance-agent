@@ -20,7 +20,7 @@ LOG_DIR = PROJECT_ROOT / "logs"
 LOG_FILE = LOG_DIR / "daemon.log"
 LOG_MAX_BYTES = 1_048_576  # 1 MB
 
-SCHEDULED_HOURS = [9, 13]
+SCHEDULE = [(9, 0), (21, 20)]  # (hour, minute)
 STARTUP_GRACE_SECONDS = 300  # 首次启动 5 分钟宽限期
 SLOT_WINDOW_SECONDS = 60     # 常规触发窗口
 TICK_INTERVAL = 30           # 主循环间隔 (秒)
@@ -29,7 +29,7 @@ BACKOFF_MAX = 300
 BACKOFF_RESET_AFTER = 60     # 稳定运行 N 秒后重置退避
 
 _listener_proc: Optional[subprocess.Popen] = None
-_triggered: set[tuple[date, int]] = set()
+_triggered: set[tuple[date, int, int]] = set()
 _shutting_down = False
 _backoff = BACKOFF_INITIAL
 _backoff_until: float = 0.0
@@ -108,10 +108,10 @@ def _is_weekday(now: datetime) -> bool:
     return now.weekday() < 5
 
 
-def _should_trigger(now: datetime, hour: int) -> bool:
+def _should_trigger(now: datetime, hour: int, minute: int = 0) -> bool:
     global _is_first_check
     window = STARTUP_GRACE_SECONDS if _is_first_check else SLOT_WINDOW_SECONDS
-    slot_dt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    slot_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     diff = (now - slot_dt).total_seconds()
     return 0 <= diff <= window
 
@@ -229,11 +229,11 @@ def main() -> None:
 
         # ---- 调度检查 ----
         if _is_weekday(now):
-            for hour in SCHEDULED_HOURS:
-                key = (now.date(), hour)
+            for hour, minute in SCHEDULE:
+                key = (now.date(), hour, minute)
                 if key in _triggered:
                     continue
-                if _should_trigger(now, hour):
+                if _should_trigger(now, hour, minute):
                     _fire_analysis()
                     _triggered.add(key)
 
@@ -246,7 +246,7 @@ def main() -> None:
         if len(_triggered) > 100:
             today = date.today()
             _triggered.clear()  # keep it simple: clear all on overflow
-            _triggered.add((today, 0))  # marker
+            _triggered.add((today, 0, 0))  # marker
 
         time.sleep(TICK_INTERVAL)
 
