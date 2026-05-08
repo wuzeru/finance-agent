@@ -5,6 +5,7 @@ feishu-listener.py — 飞书消息监听守护进程
 """
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 LOCK_FILE = PROJECT_ROOT / ".analysis.lock"
 SESSION_DIR = PROJECT_ROOT / ".feishu_sessions"
+IMAGES_DIR = PROJECT_ROOT / ".feishu_images"
 
 
 def dotenv():
@@ -37,6 +39,31 @@ ENV = {**os.environ, **dotenv()}
 
 def log(msg: str):
     print(msg, file=sys.stderr, flush=True)
+
+
+def download_image(message_id: str, image_key: str) -> str | None:
+    """下载飞书图片到本地临时目录，返回绝对路径或 None。"""
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    rel_path = f".feishu_images/{image_key}.jpg"
+    abs_path = IMAGES_DIR / f"{image_key}.jpg"
+    r = subprocess.run(
+        [
+            "lark-cli", "--profile", "finance-agent", "--as", "bot",
+            "im", "+messages-resources-download",
+            "--message-id", message_id,
+            "--file-key", image_key,
+            "--type", "image",
+            "--output", rel_path,
+        ],
+        capture_output=True,
+        cwd=PROJECT_ROOT,
+        env=ENV,
+    )
+    if r.returncode != 0:
+        log(f"[image] download failed: {r.stderr.decode(errors='replace')[:200]}")
+        return None
+    log(f"[image] downloaded: {abs_path}")
+    return str(abs_path)
 
 
 def _kill_stale_subscriptions():
@@ -288,13 +315,23 @@ def _new_session_id(user_id: str) -> str:
     return new_id
 
 
-def run_claude(user_id: str, content: str, session_id: str) -> tuple[str, str]:
+def run_claude(user_id: str, content: str, session_id: str,
+              image_path: str | None = None) -> tuple[str, str]:
     """调用 claude -p, 返回 (reply, session_id). 若 session 被占用则自动换新重试."""
-    prompt = (
-        f"飞书用户 {user_id} 说: {content}。"
-        "直接输出你的回复内容（markdown 格式，中文），"
-        "不要说你已发送消息。listener 会负责把回复推到飞书。"
-    )
+    if image_path:
+        extra = f"，文件路径: {image_path}。请用 Read 工具查看这张图片。"
+        prompt = (
+            f"飞书用户 {user_id} 发送了一张图片{extra}"
+            f"{'附言: ' + content + '。' if content else ''}"
+            "直接输出你的回复内容（markdown 格式，中文），"
+            "不要说你已发送消息。listener 会负责把回复推到飞书。"
+        )
+    else:
+        prompt = (
+            f"飞书用户 {user_id} 说: {content}。"
+            "直接输出你的回复内容（markdown 格式，中文），"
+            "不要说你已发送消息。listener 会负责把回复推到飞书。"
+        )
     for attempt in range(2):
         r = subprocess.run(
             [
@@ -344,6 +381,9 @@ def release_lock():
 
 
 def main():
+    # 清理残留临时图片目录
+    shutil.rmtree(IMAGES_DIR, ignore_errors=True)
+
     if not preflight():
         sys.exit(1)
 
@@ -399,26 +439,38 @@ def main():
             else:
                 content_raw = event.get("message", {}).get("content", "")
             # content 可能是 JSON 字符串 '{"text": "..."}' 或纯文本
+            # 提取 message_type 以支持图片/文本等多种消息类型
+            msg_type = event.get("message_type", "text")
             try:
-                content = json.loads(content_raw).get("text", content_raw)
+                content_obj = json.loads(content_raw)
             except (json.JSONDecodeError, AttributeError):
-                content = content_raw
+                content_obj = {}
+
+            if msg_type == "image":
+                image_key = content_obj.get("image_key", "")
+                text_content = content_obj.get("text", "")
+                content = ""
+            else:
+                image_key = ""
+                text_content = ""
+                content = content_obj.get("text", content_raw)
 
             log(f"[event #{event_count}] {line}")
-            log(f"[parsed] sender={sender_id} msg={msg_id} content={content}")
+            log(f"[parsed] sender={sender_id} msg={msg_id} type={msg_type} "
+                f"content={content} image_key={image_key}")
 
             if sender_id != allowed:
                 log(f"[skip] 发送者 {sender_id} 不在白名单中")
                 continue
-            if not content:
-                log("[skip] 消息内容为空")
+            if not content and not image_key:
+                log("[skip] 消息内容为空且非图片")
                 continue
 
-            # 去 @ 前缀
-            if content.startswith("@"):
+            # 去 @ 前缀（仅文本消息）
+            if content and content.startswith("@"):
                 content = content.split(None, 1)[1] if " " in content else ""
 
-            log(f"[dispatch] {content}")
+            log(f"[dispatch] type={msg_type} content={content}")
 
             # 异步 OK 表情确认收到消息
             subprocess.Popen(
@@ -438,12 +490,29 @@ def main():
                 continue
 
             try:
+                # 图片消息：先下载再传给 Claude
+                if image_key:
+                    image_path = download_image(msg_id, image_key)
+                else:
+                    image_path = None
+
                 session_id = get_session_id(sender_id)
                 log(f"[session] using session {sender_id}: {session_id}")
 
                 log("[claude] thinking...")
-                reply, session_id = run_claude(sender_id, content, session_id)
+                reply, session_id = run_claude(
+                    sender_id, content or text_content, session_id,
+                    image_path=image_path,
+                )
                 log("[claude] done")
+
+                # 清理下载的临时图片
+                if image_path:
+                    try:
+                        os.unlink(image_path)
+                        log(f"[image] cleaned up {image_path}")
+                    except OSError:
+                        pass
 
                 if reply:
                     ok = send_reply(sender_id, reply)
