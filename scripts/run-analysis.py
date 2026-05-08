@@ -373,6 +373,58 @@ def fetch_cn_fund(code):
     except Exception as e:
         return {"source": "error", "error": str(e)}
 
+def fetch_crypto(symbol, htype, exchange_id, notes=""):
+    """加密货币现货/永续合约: ccxt → Bybit/Gate → 技术指标 + 资金费率（perp）"""
+    import ccxt
+    try:
+        ex = getattr(ccxt, exchange_id)({
+            "enableRateLimit": True,
+            "timeout": 15000,  # 15s timeout（Gate 从墙内可能超时）
+        })
+        # 拉取日线 OHLCV（最多 400 天）
+        since = int((pd.Timestamp.now() - pd.Timedelta(days=400)).timestamp() * 1000)
+        ohlcv = ex.fetch_ohlcv(symbol, "1d", since=since, limit=400)
+        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        close = df["close"].astype(float)
+        price = float(close.iloc[-1])
+        change_pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) >= 2 else 0
+        ma20 = float(close.rolling(20).mean().iloc[-1])
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        ma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
+        rsi = float(calc_rsi(close).iloc[-1])
+        upper, mid, lower = calc_bollinger(close)
+        macd, signal, hist_macd = calc_macd(close)
+        result = {
+            "source": f"ccxt_{exchange_id}", "price": price, "change_pct": change_pct,
+            "ma20": ma20, "ma50": ma50, "ma200": ma200,
+            "rsi_14": rsi,
+            "bollinger_upper": float(upper.iloc[-1]),
+            "bollinger_mid": float(mid.iloc[-1]),
+            "bollinger_lower": float(lower.iloc[-1]),
+            "macd_line": float(macd.iloc[-1]),
+            "macd_signal": float(signal.iloc[-1]),
+            "macd_hist": float(hist_macd.iloc[-1]),
+            "exchange": exchange_id, "type": htype,
+        }
+        # 永续合约：额外获取资金费率
+        if htype == "crypto_perp":
+            try:
+                ticker = ex.fetch_ticker(symbol)
+                result["funding_rate"] = float(ticker.get("info", {}).get("fundingRate", 0) or 0)
+            except Exception:
+                result["funding_rate"] = None
+            # 解析 notes 中的 direction / leverage
+            for part in notes.replace(" ", "").split(","):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    if k == "direction":
+                        result["direction"] = v
+                    elif k == "leverage":
+                        result["leverage"] = float(v.replace("x", ""))
+        return result
+    except Exception as e:
+        return {"source": "error", "exchange": exchange_id, "error": str(e)}
+
 def fetch_macro():
     import yfinance as yf
     macro = {}
@@ -393,7 +445,7 @@ def fetch_macro():
         macro["sge_gold"] = None
     return macro
 
-# Fetch all — dispatch by type (commodity/fund/hk/us)
+# Fetch all — dispatch by type (commodity/fund/crypto/hk/us)
 gold_cache = None  # 多个 commodity 持仓共享同一 SGE 金价结果
 
 for holding in portfolio:
@@ -407,6 +459,10 @@ for holding in portfolio:
         results[sym] = gold_cache
     elif htype == "fund":
         results[sym] = fetch_cn_fund(sym)
+        time.sleep(1)
+    elif htype in ("crypto_spot", "crypto_perp"):
+        exchange_id = holding.get("exchange", "bybit").lower()
+        results[sym] = fetch_crypto(sym, htype, exchange_id, holding.get("notes", ""))
         time.sleep(1)
     elif holding.get("market") == "hk":
         code = sym.split(":")[1].zfill(5)  # akshare 要求 5 位补零如 00700

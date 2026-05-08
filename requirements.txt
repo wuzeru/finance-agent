@@ -11,6 +11,7 @@ async-lru==2.3.0
 attrs==26.1.0
 beautifulsoup4==4.14.3
 cattrs==26.1.0
+ccxt==4.6.19
 certifi==2026.4.22
 cffi==2.0.0
 charset-normalizer==3.4.7

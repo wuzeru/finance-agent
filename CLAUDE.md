@@ -52,9 +52,11 @@ API keys in `.env` (gitignored):
 
 Columns: `symbol,name,type,quantity,avg_cost,currency,exchange,notes`
 
-- `type`: `stock` | `etf` | `bond` | `cash` | `commodity` | `fund`
+- `type`: `stock` | `etf` | `bond` | `cash` | `commodity` | `fund` | `crypto_spot` | `crypto_perp`
 - `commodity`: 实物商品/积存金，symbol 为内部标识（如 `SGE_AU9999`），数据源为 SGE 金价
 - `fund`: 国内公募基金，symbol 为 6 位基金代码，数据源为 akshare 基金净值
+- `crypto_spot`: 加密货币现货，symbol 为交易对（如 `BTC/USDT`、`ETH/USDT`），`exchange` 列填 `bybit` 或 `gate`，数据源为 ccxt 公开行情
+- `crypto_perp`: 加密货币永续合约，symbol 同上，`notes` 中填写 `direction=long,leverage=3x` 或 `direction=short,leverage=2x`，数据源为 ccxt（含资金费率）
 - `quantity`: > 0 (float)
 - `avg_cost`: cost basis including fees (float)
 - `currency`: `USD` | `HKD` | `CNY`
@@ -396,9 +398,74 @@ Data template 中的 dispatch 循环按 `type` 字段分发，不再仅按 `mark
 ```
 type=commodity → fetch_gold_sge()（缓存共享，仅缓存成功结果）
 type=fund       → fetch_cn_fund(symbol)（symbol 即 6 位基金代码）
-market=hk      → fetch_hk(code)（code 需 5 位补零如 00700）
-default        → fetch_us(symbol)（美股原有逻辑）
+type=crypto_spot → fetch_crypto(symbol, htype, exchange_id, notes)（ccxt Bybit/Gate）
+type=crypto_perp → fetch_crypto(symbol, htype, exchange_id, notes)（ccxt + 资金费率）
+market=hk        → fetch_hk(code)（code 需 5 位补零如 00700）
+default          → fetch_us(symbol)（美股原有逻辑）
 ```
+
+## Crypto Data Sources (ccxt)
+
+For cryptocurrency spot and perpetual holdings on Bybit and Gate exchanges, use **ccxt** as the data source. ccxt provides unified access to 100+ crypto exchanges via public REST API — no API key required for market data.
+
+### Installation
+
+Already included in `requirements.txt`. Install with:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Key Functions
+
+```python
+import ccxt
+import pandas as pd
+
+# Bybit spot: BTC/USDT
+ex = ccxt.bybit({"enableRateLimit": True})
+since = int((pd.Timestamp.now() - pd.Timedelta(days=400)).timestamp() * 1000)
+ohlcv = ex.fetch_ohlcv("BTC/USDT", "1d", since=since, limit=400)
+# Returns: [[timestamp, open, high, low, close, volume], ...]
+
+# Gate perpetual: ETH/USDT:USDT
+ex = ccxt.gate({"enableRateLimit": True})
+ohlcv = ex.fetch_ohlcv("ETH/USDT:USDT", "1d", since=since, limit=400)
+
+# 永续合约资金费率（perpetual only）
+ticker = ex.fetch_ticker("ETH/USDT:USDT")
+# funding_rate 由 fetch_crypto() 自动从 ticker.info.fundingRate 提取
+```
+
+### Exchange ID Mapping
+
+| `portfolio.csv` exchange | ccxt exchange id | Notes |
+|---------------------------|------------------|-------|
+| `bybit` | `ccxt.bybit()` | 全球最大合约交易所 |
+| `gate` | `ccxt.gate()` | 山寨币品种多 |
+
+### Symbol Format
+
+| Market | Format | Example |
+|--------|--------|---------|
+| Spot | `BASE/QUOTE` | `BTC/USDT`, `ETH/USDT` |
+| Perpetual | `BASE/QUOTE:QUOTE` | `BTC/USDT:USDT`, `ETH/USDT:USDT` |
+
+### Perpetual Notes Format
+
+`notes` 列用于存储永续合约特有参数，格式为逗号分隔的 `key=value`：
+
+```
+direction=long,leverage=3x     # 3倍做多
+direction=short,leverage=2x    # 2倍做空
+```
+
+### Known Limitations
+
+- **公开数据仅到日线**: ccxt 免费获取的是日 K 线数据，无分钟级/实时推送
+- **Gate 访问不稳定**: Gate 在中国大陆可能需要代理，`fetch_ohlcv` 可能超时
+- **资金费率有时效性**: 资金费率每 8 小时结算一次，提取的是最新一期的值
+- **无持仓 API**: 没有 API key 无法获取实际持仓量/未实现盈亏，需手动维护 `portfolio.csv`
 
 ## Model Selection
 
