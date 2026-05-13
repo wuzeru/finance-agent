@@ -13,7 +13,6 @@ snapshot.py — 持仓快照 + 建议自动校准
   - Step 7.5: save_snapshot(project_root)
 """
 import csv
-import os
 import shutil
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -36,7 +35,7 @@ def save_snapshot(project_root: Path) -> Path:
     snapshots_dir = project_root / "snapshots"
     snapshots_dir.mkdir(exist_ok=True)
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     dst = snapshots_dir / f"portfolio-{ts}.csv"
     shutil.copy2(src, dst)
 
@@ -79,6 +78,53 @@ def _write_recommendations(path: Path, rows: list[dict], fieldnames: list[str]) 
         writer.writerows(rows)
 
 
+def _match_and_verify(sym: str, recs: list[dict],
+                      snapshot_ts: datetime | None, now_utc: datetime) -> list[dict]:
+    """匹配 symbol 的 pending reduce/sell 建议并标记验证。返回 changes 列表。"""
+    changes = []
+    for rec in recs:
+        rec_sym = rec.get("symbol", "").strip()
+        if rec_sym != sym:
+            continue
+        if rec.get("status", "").strip() != "pending":
+            continue
+        if rec.get("action", "").strip().lower() not in ("reduce", "sell"):
+            continue
+
+        # 检查建议时间是否在快照之后
+        rec_ts = rec.get("timestamp", "").strip()
+        if not rec_ts:
+            continue
+        try:
+            rec_dt = datetime.fromisoformat(rec_ts)
+        except ValueError:
+            continue
+
+        if snapshot_ts and rec_dt < snapshot_ts.replace(tzinfo=None):
+            continue
+
+        # 检查是否超过 30 天
+        try:
+            if rec_dt.tzinfo is None:
+                rec_dt = rec_dt.replace(tzinfo=timezone.utc)
+            if (now_utc - rec_dt).days > 30:
+                continue
+        except (TypeError, OverflowError):
+            continue
+
+        # 匹配成功 → 标记 verified（用 +00:00 格式兼容 fromisoformat）
+        verified_at_str = now_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        rec["status"] = "verified"
+        rec["verified_at"] = verified_at_str
+        rec["outcome"] = "correct(user_acted)"
+        changes.append({
+            "symbol": sym,
+            "rec_id": rec.get("id", "").strip(),
+            "action": rec.get("action", "").strip(),
+        })
+    return changes
+
+
 def calibrate_from_snapshot(project_root: Path) -> list[dict]:
     """
     对比当前 portfolio.csv 与最近快照，自动校准 pending 建议。
@@ -112,7 +158,7 @@ def calibrate_from_snapshot(project_root: Path) -> list[dict]:
     snapshot_ts = None
     for part in last_snapshot.stem.split("-", 1):
         try:
-            snapshot_ts = datetime.strptime(last_snapshot.stem, "portfolio-%Y%m%d-%H%M")
+            snapshot_ts = datetime.strptime(last_snapshot.stem, "portfolio-%Y%m%d-%H%M%S")
             break
         except ValueError:
             continue
@@ -120,6 +166,7 @@ def calibrate_from_snapshot(project_root: Path) -> list[dict]:
     changes = []
     now_utc = datetime.now(timezone.utc)
 
+    # 处理当前持仓中的减仓情况
     for sym, cur_row in current_portfolio.items():
         if sym not in old_portfolio:
             # 新增持仓，跳过
@@ -135,48 +182,12 @@ def calibrate_from_snapshot(project_root: Path) -> list[dict]:
             # 未减仓或加仓（加仓不触发 reduce/sell 校准）
             continue
 
-        # 减仓了 → 匹配 pending 的 reduce/sell 建议
-        for rec in recs:
-            rec_sym = rec.get("symbol", "").strip()
-            if rec_sym != sym:
-                continue
-            if rec.get("status", "").strip() != "pending":
-                continue
-            if rec.get("action", "").strip().lower() not in ("reduce", "sell"):
-                continue
+        changes += _match_and_verify(sym, recs, snapshot_ts, now_utc)
 
-            # 检查建议时间是否在快照之后
-            rec_ts = rec.get("timestamp", "").strip()
-            if not rec_ts:
-                continue
-            try:
-                rec_dt = datetime.fromisoformat(rec_ts)
-            except ValueError:
-                continue
-
-            if snapshot_ts and rec_dt < snapshot_ts.replace(tzinfo=None):
-                # 建议在快照之前，不是本轮产生的
-                continue
-
-            # 检查是否超过 30 天
-            try:
-                if rec_dt.tzinfo is None:
-                    rec_dt = rec_dt.replace(tzinfo=timezone.utc)
-                if (now_utc - rec_dt).days > 30:
-                    continue
-            except (TypeError, OverflowError):
-                continue
-
-            # 匹配成功 → 标记 verified
-            verified_at_str = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-            rec["status"] = "verified"
-            rec["verified_at"] = verified_at_str
-            rec["outcome"] = "correct(user_acted)"
-            changes.append({
-                "symbol": sym,
-                "rec_id": rec.get("id", "").strip(),
-                "action": rec.get("action", "").strip(),
-            })
+    # 处理完全清仓（旧快照有、当前无 → 视为 quantity=0）
+    for sym in old_portfolio:
+        if sym not in current_portfolio:
+            changes += _match_and_verify(sym, recs, snapshot_ts, now_utc)
 
     # 写回
     if changes:
@@ -212,7 +223,8 @@ def get_cooldown_symbols(project_root: Path) -> list[dict]:
         if not verified_at:
             continue
         try:
-            vt = datetime.fromisoformat(verified_at)
+            # fromisoformat 不接受 Z 后缀，统一替换为 +00:00
+            vt = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
             if vt.tzinfo is None:
                 vt = vt.replace(tzinfo=timezone.utc)
         except ValueError:
@@ -246,13 +258,13 @@ def is_in_cooldown(project_root: Path, symbol: str, current_price: float | None 
     if not matching:
         return {"in_cooldown": False, "reason": ""}
 
-    latest = matching[0]  # 按写入顺序，最新的在最后
+    latest = matching[-1]  # cooldown 列表按写入顺序追加，取最后一条（最新）
     reason = f"上月{latest['action']}建议已执行 (rec_id={latest['rec_id']})，当前在{COOLDOWN_DAYS}天冷却期内"
 
     # 暴跌覆盖检查
     if current_price is not None:
-        # 检查该标的在过去 30 天内是否暴跌 20%+
-        # 通过快照历史估算：比较当前价格与最早可用快照价格
+        # 以持仓均价 (avg_cost) 为基准判断是否暴跌 ≥20%
+        # 正常减仓后价格继续大跌应允许系统重新生成建议，不被冷却期拦截
         try:
             portfolio = _read_portfolio(project_root / "portfolio.csv")
             if symbol in portfolio:
