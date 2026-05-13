@@ -12,3 +12,4 @@ reports/
 .DS_Store
 .daemon.pid
 portfolio.csv
+snapshots/
