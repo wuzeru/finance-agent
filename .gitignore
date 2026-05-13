@@ -13,3 +13,4 @@ reports/
 .daemon.pid
 portfolio.csv
 snapshots/
+requirements.txt
