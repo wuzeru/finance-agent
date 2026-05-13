@@ -12,6 +12,8 @@ snapshot.py — 持仓快照 + 建议自动校准
   - Step 5:   is_in_cooldown(project_root, symbol) 拦截同方向建议
   - Step 7.5: save_snapshot(project_root)
 """
+from __future__ import annotations
+
 import csv
 import shutil
 from datetime import datetime, timezone, timedelta
