@@ -69,7 +69,7 @@ Columns: `id,timestamp,symbol,action,target_price_low,target_price_high,confiden
 - `action`: `buy` | `sell` | `hold` | `reduce`
 - `confidence`: 1–5
 - `status`: `pending` | `verified` | `expired`
-- `outcome`: `correct` | `incorrect` | `partial` | `expired`
+- `outcome`: `correct` | `incorrect` | `partial` | `expired` | `correct(user_acted)` — 自动校准标记，表示用户已手动执行建议
 
 Always read `recommendations.csv` at the start of every analysis run. It is the project's persistent memory across sessions.
 
@@ -77,9 +77,9 @@ Always read `recommendations.csv` at the start of every analysis run. It is the 
 
 Every significant event gets a JSON line with `ts` and `event` fields. Track: session start/end, data fetch attempts (with source and status), Feishu queries, response sent.
 
-## Path A: Scheduled Analysis Workflow (7 Steps)
+## Path A: Scheduled Analysis Workflow (7 Steps + calibration)
 
-When invoked via `scripts/run-analysis.py` (daemon scheduler trigger, weekdays 9:00 / 13:00):
+When invoked via `scripts/run-analysis.py` (daemon scheduler trigger, weekdays 9:00 / 21:20):
 
 ### Step 1 — Acquire Lock
 
@@ -87,6 +87,23 @@ When invoked via `scripts/run-analysis.py` (daemon scheduler trigger, weekdays 9
 
 ### Step 2 — Load State
 Read `portfolio.csv` and `recommendations.csv` into context.
+
+### Step 2.5 — Snapshot Calibration
+
+执行持仓快照校准，自动识别用户已手动执行的操作建议。
+
+```bash
+python3 scripts/snapshot.py calibrate
+```
+
+该命令会：
+1. 找到最近一次的快照文件 `snapshots/portfolio-YYYYMMDD-HHmm.csv`
+2. 对比当前 `portfolio.csv` 与快照的 quantity 差异
+3. 若某 symbol 的 quantity 下降，匹配 `recommendations.csv` 中 pending 的 reduce/sell 建议
+4. 匹配到的建议自动标记为 `status=verified`, `outcome=correct(user_acted)`
+5. 输出校准结果清单（供 Step 4 报告使用）
+
+**首次运行**（无 `snapshots/` 目录或无快照文件）时，校准步骤静默跳过，不报错。
 
 ### Step 3 — Collect Data
 
@@ -113,7 +130,27 @@ First, verify pending recommendations:
 
 Then analyze current holdings with latest data + historical accuracy context. If a symbol has ≥3 consecutive `incorrect` outcomes, flag it in the report as "reduced confidence".
 
-### Step 5 — Generate Report
+### Step 5 — Generate Report (with cooldown filter)
+
+在生成建议表之前，先执行冷却期检查：
+
+```bash
+python3 scripts/snapshot.py cooldown
+```
+
+**冷却期规则**：
+- 过去 30 天内被自动校准（`outcome=correct(user_acted)`）的标的，**不生成同方向的 reduce/sell 建议**
+- 例外：若该标的当前价格相对成本已下跌 ≥20%，冷却期自动解除，允许生成新建议
+- buy/hold 建议不受冷却期限制
+
+**报告新增区块**：History Review 中增加"建议执行确认"表，列出本轮校准结果和冷却期标的：
+
+```
+| 标的 | 上期建议 | 状态 |
+|------|---------|------|
+| 008888 | reduce 30% | ✅ 已执行（冷却期至 06-12） |
+| ABC | reduce 20% | ⏳ 等待执行 |
+```
 
 Write to `reports/analysis-YYYY-MM-DD-HHmm.md`. Must include:
 
@@ -146,6 +183,16 @@ Push the report summary to Feishu via `lark-cli --profile finance-agent im send`
 ### Step 7c — Log
 
 Log end-of-run to `agent.log`. Release lock.
+
+### Step 7d — Save Snapshot
+
+保存本轮持仓快照，供下一轮校准使用：
+
+```bash
+python3 scripts/snapshot.py save
+```
+
+自动清理：超过 60 份旧快照时自动删除最旧的。
 
 ## Path B: Feishu On-Demand Interaction
 
